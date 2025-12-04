@@ -104,7 +104,7 @@ export class DirectoryFuzzer {
           results.push(result)
           onProgress(result)
           return result
-        } catch (error) {
+        } catch (error: unknown) {
           const responseTime = Date.now() - startTime
           const result: FuzzResult = {
             path: pathSegment,
@@ -115,7 +115,7 @@ export class DirectoryFuzzer {
             error: error instanceof Error ? error.message : 'Unknown error'
           }
 
-          if (!error.toString().includes('aborted')) {
+          if (!String(error).includes('aborted')) {
             results.push(result)
             onProgress(result)
           }

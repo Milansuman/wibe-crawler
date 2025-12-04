@@ -180,7 +180,7 @@ export class WebCrawler {
     return this.results
   }
 
-  private async crawlPage(url: string): Promise<CrawlResult | undefined> {
+  private async crawlPage(url: string): Promise<CrawlResult> {
     if (!this.browser) {
       throw new Error('Browser not initialized')
     }
@@ -446,10 +446,23 @@ export class WebCrawler {
       }
     } catch (error) {
       console.error(error)
+      // Always return a CrawlResult on error to avoid undefined entries upstream
+      return {
+        url,
+        status: 0,
+        title: undefined,
+        links: [],
+        domains: [],
+        forms: [],
+        apiCalls: [],
+        cookies: [],
+        emails: [],
+        assets: {},
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
     } finally {
       await page.close()
     }
-    return undefined
   }
 
   private normalizeUrl(url: string): string {
