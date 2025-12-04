@@ -113,8 +113,8 @@ export class WebCrawler {
         this.urlQueue.length > 0 &&
         this.crawledUrls.size + batchUrls.length < maxPages
       ) {
-        const url = this.urlQueue.shift()!
-        if (!this.crawledUrls.has(url)) {
+        const url = this.urlQueue.shift()
+        if (url && !this.crawledUrls.has(url)) {
           batchUrls.push(url)
           this.crawledUrls.add(url)
         }
@@ -642,8 +642,48 @@ export class WebCrawler {
       console.log(response.status());
       const headers: Record<string, string> = response.headers()
 
-      const body = await response.text()
-      console.log(body);
+      let body = ''
+      try {
+        body = await response.text()
+      } catch (error) {
+        // Handle preflight request error - likely a GET form with no response body
+        if (formData.method.toUpperCase() === 'GET') {
+          // Use fetch to GET the URL with search params
+          const targetUrl = new URL(formData.action, formData.url)
+          for (const [key, value] of Object.entries(formData.fields)) {
+            targetUrl.searchParams.set(key, value)
+          }
+
+          const fetchResponse = await page.evaluate(async (url) => {
+            const res = await fetch(url)
+            const text = await res.text()
+            const headersObj: Record<string, string> = {}
+            res.headers.forEach((value, key) => {
+              headersObj[key] = value
+            })
+            return {
+              status: res.status,
+              headers: headersObj,
+              body: text,
+              url: res.url
+            }
+          }, targetUrl.toString())
+
+          await page.goto(targetUrl.toString(), { waitUntil: 'domcontentloaded' })
+          const html = await page.content()
+
+          return {
+            status: fetchResponse.status,
+            headers: fetchResponse.headers,
+            body: fetchResponse.body,
+            html,
+            finalUrl: fetchResponse.url
+          }
+        }
+        // If not a GET form, rethrow the error
+        throw error
+      }
+
       // Capture the resulting page HTML and final URL for rendering
       const html = await page.content()
       const finalUrl = page.url()
