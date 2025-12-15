@@ -1,4 +1,8 @@
 import { relations } from "drizzle-orm";
+import { jsonb } from "drizzle-orm/pg-core";
+import { integer } from "drizzle-orm/pg-core";
+import { pgEnum } from "drizzle-orm/pg-core";
+import { uuid } from "drizzle-orm/pg-core";
 import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
@@ -91,3 +95,71 @@ export const accountRelations = relations(account, ({ one }) => ({
     references: [user.id],
   }),
 }));
+
+export const projects = pgTable("projects", {
+  id: uuid().defaultRandom().primaryKey(),
+  url: text().notNull(),
+  cookieHeader: text(),
+  localStorage: text()
+});
+
+export const urlTypes = pgEnum("urlTypes", ["page", "pdf", "image", "video", "audio", "document"]);
+
+export const urls = pgTable("urls", {
+  id: uuid().defaultRandom().primaryKey(),
+  parentUrl: text().notNull(),
+  url: text().notNull(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }),
+  type: urlTypes().default("page")
+});
+
+export const subdomains = pgTable("subdomains", {
+  id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }),
+  host: text().notNull()
+});
+
+export const emails = pgTable("emails", {
+  id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }),
+  email: text().notNull(),
+  url: text().notNull()
+})
+
+export const apiCalls = pgTable("api_calls", {
+  id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }),
+  url: text().notNull(),
+  method: text().notNull().default("GET"),
+  headers: jsonb(),
+  payload: text()
+});
+
+export const vulnerabilities = pgTable("vulnerabilities", {
+  id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }),
+  title: text().notNull(),
+  description: text().notNull(),
+  cvss: integer().notNull().default(0)
+});
+
+export const exploitSteps = pgTable("exploit_steps", {
+  id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }),
+  vulnerabilityId: uuid().references(() => vulnerabilities.id, {
+    onDelete: "cascade"
+  }),
+  description: text().notNull(),
+});
