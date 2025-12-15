@@ -16,7 +16,7 @@ const handler = new RPCHandler(router, {
   ],
   plugins: [
     new CORSPlugin({
-      origin: "localhost:5173",
+      origin: "http://localhost:5173",
       credentials: true
     })
   ]
@@ -39,7 +39,7 @@ app.use('/rpc/*', async (c, next) => {
 app.use(
 	"/api/auth/*",
 	cors({
-		origin: process.env.BETTER_AUTH_URL!,
+		origin: "http://localhost:5173",
 		allowHeaders: ["Content-Type", "Authorization"],
 		allowMethods: ["POST", "GET", "OPTIONS"],
 		exposeHeaders: ["Content-Length"],

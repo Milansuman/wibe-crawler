@@ -1,6 +1,6 @@
 import { createAuthClient } from "better-auth/svelte"
-import {BACKEND_URL} from "$env/static/private";
+import {PUBLIC_BACKEND_URL} from "$env/static/public";
 
 export const authClient = createAuthClient({
-    baseURL: BACKEND_URL
+    baseURL: PUBLIC_BACKEND_URL
 })
