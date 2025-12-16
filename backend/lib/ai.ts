@@ -22,4 +22,6 @@ export async function determineUrlInterest(url: string){
     system: urlInterestPrompt,
     prompt: url
   })
+
+  return object.interest
 }
