@@ -100,19 +100,34 @@ export const projects = pgTable("projects", {
   id: uuid().defaultRandom().primaryKey(),
   url: text().notNull(),
   cookieHeader: text(),
-  localStorage: text()
+  localStorage: text(),
+  userId: text().notNull().references(() => user.id, {
+    onDelete: "cascade"
+  })
 });
 
 export const urlTypes = pgEnum("urlTypes", ["page", "pdf", "image", "video", "audio", "document"]);
 
 export const urls = pgTable("urls", {
   id: uuid().defaultRandom().primaryKey(),
-  parentUrl: text().notNull(),
+  parentUrlId: uuid(),
   url: text().notNull(),
   projectId: uuid().references(() => projects.id, {
     onDelete: "cascade"
+  }).notNull(),
+  type: urlTypes().default("page").notNull(),
+  level: integer().default(0).notNull(),
+  interest: integer().default(5).notNull(), //how interesting is this url?
+  crawled: boolean().default(false)
+});
+
+export const urlSearchParams = pgTable("url_search_params", {
+  id: uuid().defaultRandom().primaryKey(),
+  urlId: uuid().references(() => urls.id, {
+    onDelete: "cascade"
   }),
-  type: urlTypes().default("page")
+  param: text().notNull(),
+  interest: integer().default(5)
 });
 
 export const subdomains = pgTable("subdomains", {
@@ -140,7 +155,8 @@ export const apiCalls = pgTable("api_calls", {
   url: text().notNull(),
   method: text().notNull().default("GET"),
   headers: jsonb(),
-  payload: text()
+  payload: text(),
+  interest: integer().default(5)
 });
 
 export const vulnerabilities = pgTable("vulnerabilities", {
