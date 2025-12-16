@@ -6,4 +6,7 @@
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
-{@render children()}
+<div class="w-screen h-screen p-4" style="background-color: #e6e6e6; background-image: radial-gradient(circle, #d2d2d2 1px, transparent 1px); background-size: 10px 10px;">
+	{@render children()}
+	
+</div>
