@@ -1,7 +1,7 @@
 import { authenticated } from "../middleware/auth";
 import { db } from "../../lib/db";
 import { ORPCError } from "@orpc/server";
-import { projects } from "../../lib/db/schema";
+import { projects, urls } from "../../lib/db/schema";
 import { and, eq } from "drizzle-orm";
 import {z} from "zod";
 
@@ -63,6 +63,14 @@ export default {
             userId: context.user.id
           })
           .returning();
+
+        await db
+          .insert(urls)
+          .values({
+            projectId: project.id,
+            url: input.url,
+            type: "page"
+          });
 
         return project;
       } catch (error) {

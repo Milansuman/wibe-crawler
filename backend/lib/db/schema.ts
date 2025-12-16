@@ -101,7 +101,7 @@ export const projects = pgTable("projects", {
   url: text().notNull(),
   cookieHeader: text(),
   localStorage: text(),
-  userId: uuid().references(() => user.id, {
+  userId: text().notNull().references(() => user.id, {
     onDelete: "cascade"
   })
 });
@@ -110,13 +110,15 @@ export const urlTypes = pgEnum("urlTypes", ["page", "pdf", "image", "video", "au
 
 export const urls = pgTable("urls", {
   id: uuid().defaultRandom().primaryKey(),
-  parentUrl: text().notNull(),
+  parentUrlId: uuid(),
   url: text().notNull(),
   projectId: uuid().references(() => projects.id, {
     onDelete: "cascade"
-  }),
-  type: urlTypes().default("page"),
-  interest: integer().default(5) //how interesting is this url?
+  }).notNull(),
+  type: urlTypes().default("page").notNull(),
+  level: integer().default(0).notNull(),
+  interest: integer().default(5).notNull(), //how interesting is this url?
+  crawled: boolean().default(false)
 });
 
 export const urlSearchParams = pgTable("url_search_params", {
