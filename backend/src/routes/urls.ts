@@ -2,10 +2,11 @@ import { authenticated, base } from "../middleware/auth";
 import { db } from "../../lib/db";
 import { ORPCError } from "@orpc/server";
 import {z} from "zod";
-import { projects, urls } from "../../lib/db/schema";
+import { emails, projects, urls } from "../../lib/db/schema";
 import { and, asc, desc, eq } from "drizzle-orm";
-import { getUrlsFromPage, initializeCrawler } from "../../lib/crawler";
+import { getEmailsFromPage, getUrlsFromPage, initializeCrawler } from "../../lib/crawler";
 import { Deque } from "../../lib/structures";
+import { determineUrlInterest } from "../../lib/ai";
 
 type UrlSchema = {
   id?: string | null
@@ -18,10 +19,10 @@ type UrlSchema = {
 }
 
 export default {
-  crawlWebsite: authenticated
+  crawlWebsiteUrls: authenticated
     .input(z.object({
       projectId: z.string(),
-      withAi: z.boolean().default(false)
+      withAi: z.boolean().default(false),
     }))
     .handler(async function* ({input, context}){
       try {
@@ -66,6 +67,19 @@ export default {
             })
           }
 
+          if(input.withAi){
+            currentUrl.interest = await determineUrlInterest(currentUrl.url);
+          }
+
+          const pageEmails = await getEmailsFromPage(browser, currentUrl.url);
+          db
+            .insert(emails)
+            .values(pageEmails.map(email => ({
+              projectId: input.projectId,
+              email,
+              url: currentUrl.url
+            })))
+
           //do the database call in the loop in case the user cancels midway
           db
             .insert(urls)
@@ -77,6 +91,8 @@ export default {
             .onConflictDoUpdate({
               target: urls.id,
               set: {
+                ...currentUrl,
+                id: currentUrl.id!,
                 crawled: true
               }
             });
@@ -89,5 +105,6 @@ export default {
 
         throw new ORPCError("INTERNAL_SERVER_ERROR");
       }
-    })
+    }),
+  
 }
