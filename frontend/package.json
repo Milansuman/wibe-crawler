@@ -35,6 +35,7 @@
 		"@orpc/client": "^1.12.3",
 		"@orpc/server": "^1.12.3",
 		"@orpc/tanstack-query": "^1.12.3",
+		"@tanstack/svelte-query": "^6.0.10",
 		"better-auth": "^1.4.7",
 		"zod": "^4.1.13"
 	}

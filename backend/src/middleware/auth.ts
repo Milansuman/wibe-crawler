@@ -2,9 +2,10 @@ import { os } from '@orpc/server'
 import { auth } from '../../lib/auth'
 import { ORPCError } from '@orpc/server'
 
-export const base = os.$context<{ headers: Headers }>()
+export const base = os.$context<{ headers: Record<string, string> }>()
 
 export const authMiddleware = base.middleware(async ({ context, next }) => {
+
   const sessionData = await auth.api.getSession({
     headers: context.headers,
   })

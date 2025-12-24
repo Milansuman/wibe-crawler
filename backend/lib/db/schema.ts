@@ -147,6 +147,18 @@ export const emails = pgTable("emails", {
   url: text().notNull()
 })
 
+export const cookies = pgTable("cookies", {
+  id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }),
+  name: text().notNull(),
+  value: text().notNull(),
+  domain: text(),
+  path: text(),
+  url: text().notNull()
+})
+
 export const apiCalls = pgTable("api_calls", {
   id: uuid().defaultRandom().primaryKey(),
   projectId: uuid().references(() => projects.id, {

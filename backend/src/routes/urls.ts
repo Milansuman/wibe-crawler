@@ -2,7 +2,7 @@ import { authenticated, base } from "../middleware/auth";
 import { db } from "../../lib/db";
 import { ORPCError } from "@orpc/server";
 import {z} from "zod";
-import { emails, projects, urls } from "../../lib/db/schema";
+import { cookies, emails, projects, urls } from "../../lib/db/schema";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { getEmailsFromPage, getUrlsFromPage, initializeCrawler } from "../../lib/crawler";
 import { Deque } from "../../lib/structures";
@@ -106,5 +106,95 @@ export default {
         throw new ORPCError("INTERNAL_SERVER_ERROR");
       }
     }),
-  
+  getUrlsForProject: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input, context}) => {
+      try {
+        const projectUrls = await db
+          .select()
+          .from(urls)
+          .innerJoin(projects, eq(projects.id, urls.projectId))
+          .where(and(
+            eq(urls.projectId, input.projectId),
+            eq(projects.userId, context.user.id)
+          ))
+          .orderBy(asc(urls.level));
+
+        return projectUrls.map(row => row.urls);
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
+  getEmailsForProject: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input, context}) => {
+      try {
+        const projectEmails = await db
+          .select()
+          .from(emails)
+          .innerJoin(projects, eq(projects.id, emails.projectId))
+          .where(and(
+            eq(emails.projectId, input.projectId),
+            eq(projects.userId, context.user.id)
+          ));
+
+        return projectEmails.map(row => row.emails);
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
+  getCookiesForProject: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input, context}) => {
+      try {
+        const projectCookies = await db
+          .select()
+          .from(cookies)
+          .innerJoin(projects, eq(projects.id, cookies.projectId))
+          .where(and(
+            eq(cookies.projectId, input.projectId),
+            eq(projects.userId, context.user.id)
+          ));
+
+        return projectCookies.map(row => row.cookies);
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
+  getAssetUrlsForProject: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input, context}) => {
+      try {
+        const assetUrls = await db
+          .select()
+          .from(urls)
+          .innerJoin(projects, eq(projects.id, urls.projectId))
+          .where(and(
+            eq(urls.projectId, input.projectId),
+            eq(projects.userId, context.user.id),
+            eq(urls.type, "image")
+          ))
+          .orderBy(asc(urls.url));
+
+        return assetUrls.map(row => row.urls);
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
 }

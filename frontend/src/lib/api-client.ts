@@ -1,12 +1,11 @@
 import type { RouterClient } from '@orpc/server'
 import { createORPCClient, onError } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
-import { BACKEND_URL } from '$env/static/private'
-import { createTanstackQueryUtils } from '@orpc/tanstack-query'
-import router from "../../../backend/src/router";
+import { PUBLIC_BACKEND_URL } from '$env/static/public'
+import type router from "../../../backend/src/router";
 
 const link = new RPCLink({
-  url: `${BACKEND_URL}/rpc`,
+  url: `${PUBLIC_BACKEND_URL}/rpc`,
   fetch: (request, init) => {
     return fetch(request, {
       ...init,
@@ -20,5 +19,4 @@ const link = new RPCLink({
   ],
 })
 
-const client: RouterClient<typeof router> = createORPCClient(link);
-export const orpc = createTanstackQueryUtils(client);
+export const orpc: RouterClient<typeof router> = createORPCClient(link);
