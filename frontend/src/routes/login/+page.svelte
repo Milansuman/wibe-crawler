@@ -4,23 +4,17 @@
 	import { Input } from "$lib/components/ui/input";
 	import { loginSchema, type LoginSchema } from "./schema";
 	import type { PageData } from "./$types.js";
-	import type { SuperValidated, Infer } from "sveltekit-superforms";
 	import { superForm } from "sveltekit-superforms";
 	import { zod4Client } from "sveltekit-superforms/adapters";
-	import { goto } from "$app/navigation";
-  import { redirect } from "@sveltejs/kit";
-
+	import { toast } from "svelte-sonner";
+  
 	let { data }: { data: PageData } = $props();
-
-	let error = $state("");
-	let loading = $state(false);
 
 	const form = superForm(data.form, {
 		validators: zod4Client(loginSchema),
 		onUpdate: async ({ form }) => {
 			if (form.valid) {
-				loading = true;
-				error = "";
+				const toastId = toast.loading("Logging in...");
 
         const result = await authClient.signIn.email({
           email: form.data.email,
@@ -29,8 +23,14 @@
         });
 
         if (result.error) {
-          error = result.error.message || "Login failed. Please check your credentials.";
-        }
+          toast.error(result.error.message || "Login failed. Please check your credentials.", {
+						id: toastId
+					});
+        } else {
+					toast.success("Login successful!", {
+						id: toastId
+					});
+				}
 			}
 		},
 	});
@@ -55,7 +55,6 @@
 							type="email" 
 							placeholder="your@email.com"
 							bind:value={$formData.email}
-							disabled={loading}
 						/>
 					{/snippet}
 				</Form.Control>
@@ -71,21 +70,14 @@
 							type="password" 
 							placeholder="••••••••"
 							bind:value={$formData.password}
-							disabled={loading}
 						/>
 					{/snippet}
 				</Form.Control>
 				<Form.FieldErrors />
 			</Form.Field>
 
-			{#if error}
-				<div class="text-destructive text-sm">
-					{error}
-				</div>
-			{/if}
-
-			<Form.Button class="w-full" disabled={loading}>
-				{loading ? "Logging in..." : "Login"}
+			<Form.Button class="w-full">
+				Login
 			</Form.Button>
 
 			<div class="text-center text-sm">

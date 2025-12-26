@@ -8,18 +8,15 @@
 	import { superForm } from "sveltekit-superforms";
 	import { zod4Client } from "sveltekit-superforms/adapters";
 	import { goto } from "$app/navigation";
+	import { toast } from "svelte-sonner";
 
 	let { data }: { data: PageData } = $props();
-
-	let error = $state("");
-	let loading = $state(false);
 
 	const form = superForm(data.form, {
 		validators: zod4Client(signupSchema),
 		onUpdate: async ({ form }) => {
 			if (form.valid) {
-				loading = true;
-				error = "";
+				const toastId = toast.loading("Creating account...");
 
 				try {
 					const result = await authClient.signUp.email({
@@ -30,13 +27,19 @@
 					});
 
 					if (result.error) {
-						error = result.error.message || "Sign up failed. Please try again.";
+						toast.error(result.error.message || "Sign up failed. Please try again.", {
+							id: toastId
+						});
+					} else {
+						toast.success("Account created successfully!", {
+							id: toastId
+						});
 					}
 				} catch (err) {
-					error = "An unexpected error occurred. Please try again.";
+					toast.error("An unexpected error occurred. Please try again.", {
+						id: toastId
+					});
 					console.error("Signup error:", err);
-				} finally {
-					loading = false;
 				}
 			}
 		},
@@ -62,7 +65,6 @@
 							type="text" 
 							placeholder="John Doe"
 							bind:value={$formData.name}
-							disabled={loading}
 						/>
 					{/snippet}
 				</Form.Control>
@@ -78,7 +80,6 @@
 							type="email" 
 							placeholder="your@email.com"
 							bind:value={$formData.email}
-							disabled={loading}
 						/>
 					{/snippet}
 				</Form.Control>
@@ -94,7 +95,6 @@
 							type="password" 
 							placeholder="••••••••"
 							bind:value={$formData.password}
-							disabled={loading}
 						/>
 					{/snippet}
 				</Form.Control>
@@ -110,21 +110,14 @@
 							type="password" 
 							placeholder="••••••••"
 							bind:value={$formData.confirmPassword}
-							disabled={loading}
 						/>
 					{/snippet}
 				</Form.Control>
 				<Form.FieldErrors />
 			</Form.Field>
 
-			{#if error}
-				<div class="text-destructive text-sm">
-					{error}
-				</div>
-			{/if}
-
-			<Form.Button class="w-full" disabled={loading}>
-				{loading ? "Creating account..." : "Sign Up"}
+			<Form.Button class="w-full">
+				Sign Up
 			</Form.Button>
 
 			<div class="text-center text-sm">

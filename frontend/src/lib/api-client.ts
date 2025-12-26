@@ -1,5 +1,5 @@
 import type { RouterClient } from '@orpc/server'
-import { createORPCClient, onError } from '@orpc/client'
+import { createORPCClient, onError, createSafeClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/fetch'
 import { PUBLIC_BACKEND_URL } from '$env/static/public'
 import type router from "../../../backend/src/router";
@@ -20,3 +20,4 @@ const link = new RPCLink({
 })
 
 export const orpc: RouterClient<typeof router> = createORPCClient(link);
+export const safeRPC = createSafeClient(orpc);

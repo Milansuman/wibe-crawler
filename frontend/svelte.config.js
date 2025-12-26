@@ -15,7 +15,12 @@ const config = {
     alias: {
       "@/*": "./path/to/lib/*",
     },
-	}
+	},
+  compilerOptions: {
+    experimental: {
+      async: true
+    }
+  }
 };
 
 export default config;
