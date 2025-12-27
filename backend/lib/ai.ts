@@ -15,7 +15,7 @@ INSTRUCTIONS TO DETERMINE INTEREST URLS:
 
 export async function determineUrlInterest(url: string){
   const {object} = await generateObject({
-    model: groq("llama-3.1-8b-instant"),
+    model: groq("meta-llama/llama-4-scout-17b-16e-instruct"),
     schema: z.object({
       interest: z.number().describe("A number from 1 to 10")
     }),

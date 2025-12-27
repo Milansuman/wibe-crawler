@@ -41,6 +41,7 @@
 		"@xyflow/svelte": "^1.5.0",
 		"better-auth": "^1.4.7",
 		"lucide-svelte": "^0.562.0",
+		"vis-network": "^10.0.2",
 		"zod": "^4.1.13"
 	}
 }
