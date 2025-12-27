@@ -16,6 +16,7 @@ type UrlSchema = {
   interest: number
   type: "image" | "page" | "pdf" | "video" | "audio" | "document"
   projectId: string
+  crawled: boolean | null
 }
 
 export default {
@@ -34,7 +35,8 @@ export default {
             level: urls.level,
             interest: urls.interest,
             type: urls.type,
-            projectId: urls.projectId
+            projectId: urls.projectId,
+            crawled: urls.crawled
           })
           .from(urls)
           .innerJoin(projects, eq(projects.id, urls.projectId))
@@ -52,6 +54,7 @@ export default {
 
         while(queuedUrls.size > 0){
           const currentUrl = queuedUrls.popFront();
+          console.log("visiting ", currentUrl?.url);
           if(!currentUrl) break;
 
           const links = await getUrlsFromPage(browser, currentUrl.url);
@@ -63,7 +66,8 @@ export default {
               parentUrlId: currentUrl.id,
               type: "page",
               url: link,
-              projectId: currentUrl.projectId
+              projectId: currentUrl.projectId,
+              crawled: false
             })
           }
 
@@ -72,16 +76,18 @@ export default {
           }
 
           const pageEmails = await getEmailsFromPage(browser, currentUrl.url);
-          db
+          if(pageEmails.length > 0){
+            db
             .insert(emails)
             .values(pageEmails.map(email => ({
               projectId: input.projectId,
               email,
               url: currentUrl.url
             })))
+          }
 
           //do the database call in the loop in case the user cancels midway
-          db
+          const [currentStoredUrl] = await db
             .insert(urls)
             .values({
               ...currentUrl,
@@ -95,12 +101,16 @@ export default {
                 id: currentUrl.id!,
                 crawled: true
               }
-            });
-          visitedUrls.pushBack(currentUrl);
-          yield currentUrl;
+            }).returning();
+
+          visitedUrls.pushBack(currentStoredUrl);
+          console.log(currentStoredUrl);
+          yield currentStoredUrl;
         }
 
+        return;
       } catch (error) {
+        console.error(error);
         if(error instanceof ORPCError) throw error;
 
         throw new ORPCError("INTERNAL_SERVER_ERROR");
@@ -124,6 +134,7 @@ export default {
 
         return projectUrls.map(row => row.urls);
       } catch (error) {
+        console.error(error);
         if(error instanceof ORPCError) throw error;
 
         throw new ORPCError("INTERNAL_SERVER_ERROR");
@@ -146,6 +157,7 @@ export default {
 
         return projectEmails.map(row => row.emails);
       } catch (error) {
+        console.error(error);
         if(error instanceof ORPCError) throw error;
 
         throw new ORPCError("INTERNAL_SERVER_ERROR");
@@ -168,6 +180,7 @@ export default {
 
         return projectCookies.map(row => row.cookies);
       } catch (error) {
+        console.error(error);
         if(error instanceof ORPCError) throw error;
 
         throw new ORPCError("INTERNAL_SERVER_ERROR");
@@ -192,6 +205,7 @@ export default {
 
         return assetUrls.map(row => row.urls);
       } catch (error) {
+        console.error(error);
         if(error instanceof ORPCError) throw error;
 
         throw new ORPCError("INTERNAL_SERVER_ERROR");

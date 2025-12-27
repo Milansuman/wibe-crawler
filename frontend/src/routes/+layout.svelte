@@ -10,7 +10,7 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
-<div class="h-screen w-screen p-4 bg-background">
-  <Toaster/>
+<div class="h-screen w-screen p-4 bg-background text-foreground dark">
+  <Toaster theme="dark"/>
 	{@render children()}
 </div>

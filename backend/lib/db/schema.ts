@@ -116,7 +116,7 @@ export const urls = pgTable("urls", {
     onDelete: "cascade"
   }).notNull(),
   type: urlTypes().default("page").notNull(),
-  level: integer().default(0).notNull(),
+  level: integer().default(0).notNull(), //level in the tree
   interest: integer().default(5).notNull(), //how interesting is this url?
   crawled: boolean().default(false)
 });

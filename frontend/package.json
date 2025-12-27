@@ -38,7 +38,9 @@
 		"@orpc/server": "^1.12.3",
 		"@orpc/tanstack-query": "^1.12.3",
 		"@tanstack/svelte-query": "^6.0.10",
+		"@xyflow/svelte": "^1.5.0",
 		"better-auth": "^1.4.7",
+		"lucide-svelte": "^0.562.0",
 		"zod": "^4.1.13"
 	}
 }
