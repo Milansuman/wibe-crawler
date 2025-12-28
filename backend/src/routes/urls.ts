@@ -144,7 +144,7 @@ export default {
             }
 
             // Only add URLs from the same domain as the project
-            if (linkUrl.hostname !== projectDomain) {
+            if (!linkUrl.hostname.includes(projectDomain)) {
               console.log(`Skipping ${link} - different domain (${linkUrl.hostname} !== ${projectDomain})`);
               continue;
             }
@@ -164,7 +164,7 @@ export default {
             queuedUrls.pushBack(newUrl);
 
             try {
-              await db
+              const [uncrawledUrl] = await db
                 .insert(urls)
                 .values({
                   parentUrlId: newUrl.parentUrlId,
@@ -175,7 +175,9 @@ export default {
                   projectId: newUrl.projectId,
                   crawled: newUrl.crawled
                 })
-                .onConflictDoNothing();
+                .onConflictDoNothing()
+                .returning();
+              yield uncrawledUrl;
             } catch (dbError) {
               console.error(`Failed to insert URL ${link}:`, dbError);
               // Continue processing other URLs
