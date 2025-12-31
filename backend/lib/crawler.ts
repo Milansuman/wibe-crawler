@@ -1,4 +1,43 @@
-import puppeteer, { Browser } from "puppeteer";
+import puppeteer, { Browser, Page, CookieParam } from "puppeteer";
+
+export interface CrawlerOptions {
+  cookies?: CookieParam[];
+  localStorage?: Record<string, string>;
+}
+
+export interface NetworkRequest {
+  url: string;
+  method: string;
+  resourceType: string;
+  status?: number;
+  headers?: Record<string, string>;
+}
+
+async function applyPageOptions(browser: Browser, page: Page, url: string, options?: CrawlerOptions) {
+  // Set cookies if provided
+  if (options?.cookies && options.cookies.length > 0) {
+    const urlObj = new URL(url);
+    const cookiesWithDomain = options.cookies.map(cookie => ({
+      ...cookie,
+      domain: cookie.domain || urlObj.hostname
+    }));
+    await browser.setCookie(...cookiesWithDomain);
+  }
+
+  // Navigate to page first for localStorage
+  if (options?.localStorage) {
+    // Navigate to the page domain to set localStorage
+    const urlObj = new URL(url);
+    await page.goto(`${urlObj.protocol}//${urlObj.host}`, { waitUntil: "domcontentloaded", timeout: 10000 });
+    
+    // Set localStorage items
+    await page.evaluate((storage: Record<string, string>) => {
+      for (const [key, value] of Object.entries(storage)) {
+        localStorage.setItem(key, value);
+      }
+    }, options.localStorage);
+  }
+}
 
 export async function initializeCrawler(url?: string) {
   try {
@@ -9,10 +48,12 @@ export async function initializeCrawler(url?: string) {
   }
 }
 
-export async function getUrlsFromPage(browser: Browser, url: string){
+export async function getUrlsFromPage(browser: Browser, url: string, options?: CrawlerOptions){
   let page;
   try {
     page = await browser.newPage();
+
+    await applyPageOptions(browser, page, url, options);
 
     await page.goto(url, {
       waitUntil: "domcontentloaded",
@@ -46,10 +87,12 @@ export async function getUrlsFromPage(browser: Browser, url: string){
   }
 }
 
-export async function getSubdomainsFromPage(browser: Browser, url: string, baseDomain: string) {
+export async function getSubdomainsFromPage(browser: Browser, url: string, baseDomain: string, options?: CrawlerOptions) {
   let page;
   try {
     page = await browser.newPage();
+    
+    await applyPageOptions(browser, page, url, options);
     
     await page.goto(url, {
       waitUntil: "domcontentloaded",
@@ -96,10 +139,12 @@ export async function getSubdomainsFromPage(browser: Browser, url: string, baseD
   }
 }
 
-export async function getEmailsFromPage(browser: Browser, url: string) {
+export async function getEmailsFromPage(browser: Browser, url: string, options?: CrawlerOptions) {
   let page;
   try {
     page = await browser.newPage();
+    
+    await applyPageOptions(browser, page, url, options);
     
     await page.goto(url, {
       waitUntil: "domcontentloaded",
@@ -127,6 +172,127 @@ export async function getEmailsFromPage(browser: Browser, url: string) {
       }
     }
     return [];
+  }
+}
+
+export async function getCookiesFromPage(browser: Browser, url: string, options?: CrawlerOptions) {
+  let page;
+  try {
+    page = await browser.newPage();
+    
+    await applyPageOptions(browser, page, url, options);
+    
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000
+    });
+
+    const cookies = await page.cookies();
+    
+    await page.close();
+    
+    return cookies;
+  } catch (error) {
+    console.error(`Failed to get cookies from page ${url}:`, error);
+    if (page) {
+      try {
+        await page.close();
+      } catch (closeError) {
+        console.error("Failed to close page:", closeError);
+      }
+    }
+    return [];
+  }
+}
+
+export async function getNetworkRequestsFromPage(browser: Browser, url: string, options?: CrawlerOptions): Promise<NetworkRequest[]> {
+  let page;
+  try {
+    page = await browser.newPage();
+    
+    const requests: NetworkRequest[] = [];
+    const requestMap = new Map<string, NetworkRequest>();
+
+    // Enable request interception to capture requests
+    await page.setRequestInterception(true);
+    
+    page.on('request', (request) => {
+      const req: NetworkRequest = {
+        url: request.url(),
+        method: request.method(),
+        resourceType: request.resourceType(),
+        headers: request.headers()
+      };
+      requestMap.set(request.url(), req);
+      request.continue();
+    });
+
+    page.on('response', (response) => {
+      const url = response.url();
+      const existingReq = requestMap.get(url);
+      if (existingReq) {
+        existingReq.status = response.status();
+      }
+    });
+    
+    await applyPageOptions(browser, page, url, options);
+    
+    await page.goto(url, {
+      waitUntil: "networkidle2",
+      timeout: 30000
+    });
+
+    // Wait a bit for any lazy-loaded resources
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Convert map to array
+    requests.push(...Array.from(requestMap.values()));
+
+    await page.close();
+    
+    return requests;
+  } catch (error) {
+    console.error(`Failed to get network requests from page ${url}:`, error);
+    if (page) {
+      try {
+        await page.close();
+      } catch (closeError) {
+        console.error("Failed to close page:", closeError);
+      }
+    }
+    return [];
+  }
+}
+
+export async function getTitleFromPage(browser: Browser, url: string, options?: CrawlerOptions): Promise<string | null> {
+  let page;
+  try {
+    page = await browser.newPage();
+    
+    await applyPageOptions(browser, page, url, options);
+    
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000
+    });
+
+    const title = await page.evaluate(() => {
+      return document.title || null;
+    });
+
+    await page.close();
+    
+    return title;
+  } catch (error) {
+    console.error(`Failed to get title from page ${url}:`, error);
+    if (page) {
+      try {
+        await page.close();
+      } catch (closeError) {
+        console.error("Failed to close page:", closeError);
+      }
+    }
+    return null;
   }
 }
 

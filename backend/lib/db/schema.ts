@@ -1,9 +1,7 @@
+import { ReasoningPart, ToolCallPart } from "@ai-sdk/provider-utils";
+import { FilePart, ImagePart, TextPart } from "ai";
 import { relations } from "drizzle-orm";
-import { jsonb } from "drizzle-orm/pg-core";
-import { integer } from "drizzle-orm/pg-core";
-import { pgEnum } from "drizzle-orm/pg-core";
-import { uuid } from "drizzle-orm/pg-core";
-import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, index, uuid, pgEnum, integer, jsonb } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -99,95 +97,42 @@ export const accountRelations = relations(account, ({ one }) => ({
 export const projects = pgTable("projects", {
   id: uuid().defaultRandom().primaryKey(),
   url: text().notNull(),
-  cookieHeader: text(),
-  localStorage: text(),
-  userId: text().notNull().references(() => user.id, {
+  title: text().notNull(),
+  userId: text().references(() => user.id, {
     onDelete: "cascade"
-  })
-});
+  }).notNull()
+}).enableRLS();
 
-export const urlTypes = pgEnum("urlTypes", ["page", "pdf", "image", "video", "audio", "document"]);
+export const projectMessageTypes = pgEnum("project_message_types", ["system", "user", "assistant", "tool"]);
 
-export const urls = pgTable("urls", {
+export const projectMessages = pgTable("project_messages", {
   id: uuid().defaultRandom().primaryKey(),
-  parentUrlId: uuid(),
-  url: text().notNull(),
   projectId: uuid().references(() => projects.id, {
     onDelete: "cascade"
   }).notNull(),
-  type: urlTypes().default("page").notNull(),
-  level: integer().default(0).notNull(), //level in the tree
-  interest: integer().default(5).notNull(), //how interesting is this url?
-  crawled: boolean().default(false)
-});
-
-export const urlSearchParams = pgTable("url_search_params", {
-  id: uuid().defaultRandom().primaryKey(),
-  urlId: uuid().references(() => urls.id, {
-    onDelete: "cascade"
-  }),
-  param: text().notNull(),
-  interest: integer().default(5)
-});
-
-export const subdomains = pgTable("subdomains", {
-  id: uuid().defaultRandom().primaryKey(),
-  projectId: uuid().references(() => projects.id, {
-    onDelete: "cascade"
-  }),
-  host: text().notNull()
-});
-
-export const emails = pgTable("emails", {
-  id: uuid().defaultRandom().primaryKey(),
-  projectId: uuid().references(() => projects.id, {
-    onDelete: "cascade"
-  }),
-  email: text().notNull(),
-  url: text().notNull()
-})
-
-export const cookies = pgTable("cookies", {
-  id: uuid().defaultRandom().primaryKey(),
-  projectId: uuid().references(() => projects.id, {
-    onDelete: "cascade"
-  }),
-  name: text().notNull(),
-  value: text().notNull(),
-  domain: text(),
-  path: text(),
-  url: text().notNull()
-})
-
-export const apiCalls = pgTable("api_calls", {
-  id: uuid().defaultRandom().primaryKey(),
-  projectId: uuid().references(() => projects.id, {
-    onDelete: "cascade"
-  }),
-  url: text().notNull(),
-  method: text().notNull().default("GET"),
-  headers: jsonb(),
-  payload: text(),
-  interest: integer().default(5)
-});
+  role: projectMessageTypes().default("user"),
+  text: text(),
+  content: jsonb().$type<Array<TextPart | ReasoningPart>>(),
+  // values of cookies and localStorage can change as the agent progresses through the website
+  cookies: text(),
+  localStorage: text()
+}).enableRLS();
 
 export const vulnerabilities = pgTable("vulnerabilities", {
   id: uuid().defaultRandom().primaryKey(),
   projectId: uuid().references(() => projects.id, {
     onDelete: "cascade"
-  }),
+  }).notNull(),
   title: text().notNull(),
-  description: text().notNull(),
-  cvss: integer().notNull().default(0)
-});
+  description: text(),
+  cvss: integer().default(0)
+}).enableRLS();
 
-export const exploitSteps = pgTable("exploit_steps", {
+export const checkPoints = pgTable("checkpoints", {
   id: uuid().defaultRandom().primaryKey(),
   projectId: uuid().references(() => projects.id, {
     onDelete: "cascade"
-  }),
-  vulnerabilityId: uuid().references(() => vulnerabilities.id, {
-    onDelete: "cascade"
-  }),
-  description: text().notNull(),
-});
+  }).notNull(),
+  url: text(),
+  context: text().notNull()
+}).enableRLS();
