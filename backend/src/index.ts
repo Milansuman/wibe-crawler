@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { auth } from "../lib/auth";
 import { cors } from "hono/cors";
 import { RPCHandler } from '@orpc/server/fetch'
-import { onError, onStart } from '@orpc/server'
+import { onError, onStart, onFinish } from '@orpc/server'
 import { CORSPlugin } from '@orpc/server/plugins';
 import router from "./router";
 

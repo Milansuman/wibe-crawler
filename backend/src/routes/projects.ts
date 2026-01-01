@@ -62,5 +62,18 @@ export default {
 
         throw new ORPCError("INTERNAL_SERVER_ERROR");
       }
+    }),
+  clearProjectMessages: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input}) => {
+      try {
+        await db.delete(projectMessages).where(eq(projectMessages.projectId, input.projectId));
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
     })
 }

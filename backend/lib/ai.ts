@@ -1,10 +1,10 @@
 import { createGroq } from '@ai-sdk/groq';
-import { streamText, CoreMessage, ToolSet } from 'ai';
+import { streamText, CoreMessage, ToolSet, stepCountIs } from 'ai';
 import { ModelMessage, ReasoningPart, ToolCallPart } from "@ai-sdk/provider-utils";
 import { FilePart, ImagePart, TextPart } from "ai";
 import { z } from "zod";
 import puppeteer from 'puppeteer';
-import { getUrlsFromPage, getSubdomainsFromPage, getEmailsFromPage, getCookiesFromPage, getNetworkRequestsFromPage } from './crawler';
+import { getUrlsFromPage, getSubdomainsFromPage, getEmailsFromPage, getCookiesFromPage, getNetworkRequestsFromPage, getPageContent } from './crawler';
 
 interface Message {
   role: "system" | "user" | "tool" | "assistant"
@@ -180,13 +180,30 @@ const tools: ToolSet = {
         throw error;
       }
     }
+  },
+  getPageContent: {
+    description: "Tool to retrieve the visible text content and HTML source code of a web page. Useful for analyzing page structure, finding forms, input fields, JavaScript code, or sensitive information in the page source.",
+    inputSchema: z.object({
+      url: z.url().describe("URL of the webpage to get content from")
+    }),
+    execute: async ({url}) => {
+      const browser = await puppeteer.launch();
+      try {
+        const content = await getPageContent(browser, url);
+        await browser.close();
+        return JSON.stringify(content);
+      } catch (error) {
+        await browser.close();
+        throw error;
+      }
+    }
   }
 }
 
-export async function* streamAgentResponse(messages: Message[]) {
+export async function* streamAgentResponse(messages: Message[], url: string) {
   const { fullStream } = streamText({
     model: groq("moonshotai/kimi-k2-instruct-0905"),
-    system: mainSystemPrompt,
+    system: `${mainSystemPrompt} website: ${url}`,
     messages: messages.map((message) => {
       if (message.text) {
         return {
@@ -200,7 +217,8 @@ export async function* streamAgentResponse(messages: Message[]) {
         }
       }
     }) as ModelMessage[],
-    tools
+    tools,
+    stopWhen: stepCountIs(10)
   })
 
   for await (const chunk of fullStream) {

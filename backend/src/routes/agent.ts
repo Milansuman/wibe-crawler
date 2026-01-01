@@ -2,7 +2,7 @@ import { authenticated } from "../middleware/auth";
 import { db } from "../../lib/db";
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { projectMessages } from "../../lib/db/schema";
+import { projectMessages, projects } from "../../lib/db/schema";
 import { eq } from "drizzle-orm";
 import { streamAgentResponse } from "../../lib/ai";
 
@@ -23,6 +23,10 @@ export default {
     }))
     .handler(async function* ({ context, input }) {
       try {
+        const [project] = await db.select()
+          .from(projects)
+          .where(eq(projects.id, input.projectId));
+
         const messageList = await db.select()
           .from(projectMessages)
           .where(eq(projectMessages.projectId, input.projectId));
@@ -41,7 +45,7 @@ export default {
 
         await saveProjectMessage(input.projectId, "user", input.prompt);
 
-        const agentStream = streamAgentResponse(formattedMessageList);
+        const agentStream = streamAgentResponse(formattedMessageList, project.url);
 
         let currentResponseType;
         let responseBuffer = "";
@@ -54,7 +58,7 @@ export default {
               currentResponseType = agentResponse.type;
             }
 
-            if (currentResponseType !== agentResponse.type && agentResponse.type === "text") {
+            if (currentResponseType !== agentResponse.type && agentResponse.type === "text" && responseBuffer.length > 0) {
               await saveProjectMessage(input.projectId, "assistant", responseBuffer);
               currentResponseType = agentResponse.type;
               responseBuffer = "";

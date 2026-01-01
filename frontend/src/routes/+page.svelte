@@ -8,7 +8,7 @@
   import type { PageProps } from "./$types";
   import { safeRPC } from "$lib/api-client";
   import { toast } from "svelte-sonner";
-  import {Send, StopCircle} from "lucide-svelte";
+  import {Send, StopCircle, Trash} from "lucide-svelte";
   import SvelteMarkdown from "svelte-markdown";
 
   interface Project {
@@ -45,6 +45,8 @@
   let agentResponseBuffer = $state("");
   let responseTokenTypeFlag = $state<"text" | "reasoning" | undefined>();
   let projectMessages = $state<ProjectMessage[]>([]);
+  let isStreaming = $state(false);
+  let abortController = $state<AbortController | undefined>();
 
   // Handlers
   const handleNewProject = async (event: SubmitEvent) => {
@@ -70,8 +72,12 @@
 
   const handleAgentPrompt = async () => {
     if(promptInput.length > 0 && currentProject){
+      isStreaming = true;
+      abortController = new AbortController();
 
       const promptText = promptInput; //stop promptInput state change from affecting projectMessages
+      promptInput = ""; // Clear input immediately
+      
       projectMessages.push({
         id: "deadbeef",
         projectId: currentProject.id,
@@ -79,56 +85,96 @@
         text: promptText
       })
 
-      
-      const {data: responseStream, error} = await safeRPC.agent.getAgentResponse({
-        prompt: promptInput,
-        projectId: currentProject.id
-      });
+      try {
+        const {data: responseStream, error} = await safeRPC.agent.getAgentResponse({
+          prompt: promptText,
+          projectId: currentProject.id
+        }, {
+          signal: abortController.signal
+        });
 
-      if(error){
-        toast.error(error.message);
-        return;
-      }
-
-      const {done, value} = await responseStream.next();
-      if(done){
-        const firstToken = (value as unknown as {type: "text" | "reasoning", content: string})
-        responseTokenTypeFlag = firstToken.type;
-        if(responseTokenTypeFlag === "text"){
-          agentResponseBuffer += firstToken.content;
-        }else if(responseTokenTypeFlag === "reasoning"){
-          agentResponseReasoningBuffer += firstToken.content;
+        if(error){
+          console.log(error);
+          toast.error(error.message);
+          return;
         }
-      }
 
-      for await (const responseObject of responseStream){
-
-        if(responseObject.type === "text"){
-          if(responseObject.type !== responseTokenTypeFlag){
-            const messageText = agentResponseBuffer; //ensure it isn't the state
-            projectMessages.push({
-              id: "deadbeef",
-              projectId: currentProject.id,
-              role: "assistant",
-              text: messageText
-            })
-            agentResponseBuffer = "";
-            responseTokenTypeFlag = responseObject.type;
+        const {done, value} = await responseStream.next();
+        if(!done){
+          const firstToken = (value as unknown as {type: "text" | "reasoning", content: string})
+          responseTokenTypeFlag = firstToken.type;
+          if(responseTokenTypeFlag === "text"){
+            agentResponseBuffer += firstToken.content;
+          }else if(responseTokenTypeFlag === "reasoning"){
+            agentResponseReasoningBuffer += firstToken.content;
           }
-
-          agentResponseBuffer += responseObject.content;
-        }else if(responseObject.type === "reasoning"){
-          if(responseObject.type !== responseTokenTypeFlag){
-            agentResponseReasoningBuffer = "";
-            responseTokenTypeFlag = responseObject.type;
-          }
-
-          agentResponseReasoningBuffer += responseObject.content;
         }
-      }
 
-      responseTokenTypeFlag = undefined;
+        for await (const responseObject of responseStream){
+
+          if(responseObject.type === "text"){
+            if(responseObject.type !== responseTokenTypeFlag){
+              const messageText = agentResponseBuffer; //ensure it isn't the state
+              projectMessages.push({
+                id: "deadbeef",
+                projectId: currentProject.id,
+                role: "assistant",
+                text: messageText
+              })
+              agentResponseBuffer = "";
+              responseTokenTypeFlag = responseObject.type;
+            }
+
+            agentResponseBuffer += responseObject.content;
+          }else if(responseObject.type === "reasoning"){
+            if(responseObject.type !== responseTokenTypeFlag){
+              agentResponseReasoningBuffer = "";
+              responseTokenTypeFlag = responseObject.type;
+            }
+
+            agentResponseReasoningBuffer += responseObject.content;
+          }
+        }
+
+        // Push any remaining buffer content when stream ends
+        if(agentResponseBuffer.length > 0){
+          const messageText = agentResponseBuffer;
+          projectMessages.push({
+            id: "deadbeef",
+            projectId: currentProject.id,
+            role: "assistant",
+            text: messageText
+          })
+          agentResponseBuffer = "";
+        }
+      } catch (error: any) {
+        if (error.name === 'AbortError') {
+          toast.info("Response stopped");
+        } else {
+          toast.error("An error occurred");
+        }
+      } finally {
+        responseTokenTypeFlag = undefined;
+        agentResponseReasoningBuffer = "";
+        isStreaming = false;
+        abortController = undefined;
+      }
     }
+  }
+
+  const handleStopResponse = () => {
+    if (abortController) {
+      abortController.abort();
+    }
+  }
+
+  const handleClearChat = async () => {
+    if(!currentProject) return;
+
+    await safeRPC.projects.clearProjectMessages({
+      projectId: currentProject.id
+    });
+    projectMessages = [];
   }
 
   // Effects
@@ -215,7 +261,7 @@
           {#if responseTokenTypeFlag === "reasoning"}
             <div class="flex flex-col">
               <h2 class="font-bold text-muted-foreground text-sm">Agent (Reasoning)</h2>
-              <p>{agentResponseReasoningBuffer}</p>
+              <p class="text-muted-foreground">{agentResponseReasoningBuffer}</p>
             </div>
           {:else if responseTokenTypeFlag === "text"}
             <div class="flex flex-col">
@@ -227,11 +273,24 @@
       </div>
       <div class="absolute bottom-0 w-full p-4">
         <InputGroup.Root class="backdrop-blur-3xl">
-          <InputGroup.Input placeholder="Describe your suggestions" oninput={(event) => promptInput = event.currentTarget!.value}/>
+          <InputGroup.Input 
+            bind:value={promptInput}
+            placeholder="Describe your suggestions" 
+            disabled={isStreaming}
+          />
           <InputGroup.Addon align="inline-end">
-            <InputGroup.Button onclick={handleAgentPrompt}>
-              <Send size={30}/>
+            <InputGroup.Button onclick={handleClearChat} disabled={isStreaming}>
+              <Trash/>
             </InputGroup.Button>
+            {#if isStreaming}
+              <InputGroup.Button onclick={handleStopResponse}>
+                <StopCircle size={30}/>
+              </InputGroup.Button>
+            {:else}
+              <InputGroup.Button onclick={handleAgentPrompt} disabled={promptInput.length === 0}>
+                <Send size={30}/>
+              </InputGroup.Button>
+            {/if}
           </InputGroup.Addon>
         </InputGroup.Root>
       </div>

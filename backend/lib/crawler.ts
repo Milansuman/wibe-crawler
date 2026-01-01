@@ -296,3 +296,38 @@ export async function getTitleFromPage(browser: Browser, url: string, options?: 
   }
 }
 
+export async function getPageContent(browser: Browser, url: string, options?: CrawlerOptions): Promise<{ text: string; html: string } | null> {
+  let page;
+  try {
+    page = await browser.newPage();
+    
+    await applyPageOptions(browser, page, url, options);
+    
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000
+    });
+
+    const content = await page.evaluate(() => {
+      return {
+        text: document.body.innerText || '',
+        html: document.documentElement.outerHTML || ''
+      };
+    });
+
+    await page.close();
+    
+    return content;
+  } catch (error) {
+    console.error(`Failed to get page content from ${url}:`, error);
+    if (page) {
+      try {
+        await page.close();
+      } catch (closeError) {
+        console.error("Failed to close page:", closeError);
+      }
+    }
+    return null;
+  }
+}
+
