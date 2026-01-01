@@ -112,10 +112,7 @@ export const projectMessages = pgTable("project_messages", {
   }).notNull(),
   role: projectMessageTypes().default("user"),
   text: text(),
-  content: jsonb().$type<Array<TextPart | ReasoningPart>>(),
-  // values of cookies and localStorage can change as the agent progresses through the website
-  cookies: text(),
-  localStorage: text()
+  content: jsonb().$type<Array<TextPart | ReasoningPart>>()
 }).enableRLS();
 
 export const vulnerabilities = pgTable("vulnerabilities", {
