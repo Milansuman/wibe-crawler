@@ -133,3 +133,10 @@ export const checkPoints = pgTable("checkpoints", {
   url: text(),
   context: text().notNull()
 }).enableRLS();
+
+export const pages = pgTable("pages", {
+  id: uuid().defaultRandom().primaryKey(),
+  url: text().notNull().unique(),
+  js: text(),
+  html: text()
+}).enableRLS();

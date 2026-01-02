@@ -296,7 +296,7 @@ export async function getTitleFromPage(browser: Browser, url: string, options?: 
   }
 }
 
-export async function getPageContent(browser: Browser, url: string, options?: CrawlerOptions): Promise<{ text: string; html: string } | null> {
+export async function getPageContent(browser: Browser, url: string, options?: CrawlerOptions): Promise<{ text: string; html: string; scripts: string[] } | null> {
   let page;
   try {
     page = await browser.newPage();
@@ -304,14 +304,24 @@ export async function getPageContent(browser: Browser, url: string, options?: Cr
     await applyPageOptions(browser, page, url, options);
     
     await page.goto(url, {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle2", // Wait for network to be idle
       timeout: 30000
     });
 
+    // Wait additional time for React/SPA content to render
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
     const content = await page.evaluate(() => {
+      // Extract all script content
+      const scriptElements = Array.from(document.querySelectorAll('script'));
+      const scripts = scriptElements
+        .map(script => script.innerHTML)
+        .filter(content => content.trim().length > 0);
+
       return {
         text: document.body.innerText || '',
-        html: document.documentElement.outerHTML || ''
+        html: document.documentElement.outerHTML || '',
+        scripts: scripts
       };
     });
 

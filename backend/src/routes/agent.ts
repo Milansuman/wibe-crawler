@@ -31,7 +31,9 @@ export default {
           .from(projectMessages)
           .where(eq(projectMessages.projectId, input.projectId));
 
-        const formattedMessageList = messageList.map(message => ({
+        const formattedMessageList = messageList
+          .filter(message => message.role !== "tool")
+          .map(message => ({
           role: message.role!,
           text: message.text,
           content: message.content
@@ -45,7 +47,7 @@ export default {
 
         await saveProjectMessage(input.projectId, "user", input.prompt);
 
-        const agentStream = streamAgentResponse(formattedMessageList, project.url);
+        const agentStream = streamAgentResponse(formattedMessageList, project.url, input.projectId);
 
         let currentResponseType;
         let responseBuffer = "";
@@ -66,9 +68,9 @@ export default {
 
             responseBuffer += agentResponse.content;
           } else if (agentResponse.type === "tool") {
+            yield agentResponse;
             currentResponseType = "tool";
             responseBuffer = "";
-            await saveProjectMessage(input.projectId, "tool", `Agent called ${agentResponse.content}`);
           }
         }
 

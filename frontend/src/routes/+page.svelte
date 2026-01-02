@@ -43,7 +43,8 @@
   let promptInput = $state("");
   let agentResponseReasoningBuffer = $state("");
   let agentResponseBuffer = $state("");
-  let responseTokenTypeFlag = $state<"text" | "reasoning" | undefined>();
+  let agentToolCallBuffer = $state("");
+  let responseTokenTypeFlag = $state<"text" | "reasoning" | "tool" | undefined>();
   let projectMessages = $state<ProjectMessage[]>([]);
   let isStreaming = $state(false);
   let abortController = $state<AbortController | undefined>();
@@ -101,12 +102,14 @@
 
         const {done, value} = await responseStream.next();
         if(!done){
-          const firstToken = (value as unknown as {type: "text" | "reasoning", content: string})
+          const firstToken = (value as unknown as {type: "text" | "reasoning" | "tool", content: string})
           responseTokenTypeFlag = firstToken.type;
           if(responseTokenTypeFlag === "text"){
             agentResponseBuffer += firstToken.content;
           }else if(responseTokenTypeFlag === "reasoning"){
             agentResponseReasoningBuffer += firstToken.content;
+          }else if(responseTokenTypeFlag === "tool"){
+            agentToolCallBuffer += firstToken.content;
           }
         }
 
@@ -133,6 +136,13 @@
             }
 
             agentResponseReasoningBuffer += responseObject.content;
+          }else if(responseObject.type === "tool"){
+            if(responseObject.type !== responseTokenTypeFlag){
+              agentToolCallBuffer = "";
+              responseTokenTypeFlag = responseObject.type;
+            }
+
+            agentToolCallBuffer += responseObject.content;
           }
         }
 
@@ -156,6 +166,7 @@
       } finally {
         responseTokenTypeFlag = undefined;
         agentResponseReasoningBuffer = "";
+        agentToolCallBuffer = "";
         isStreaming = false;
         abortController = undefined;
       }
@@ -254,6 +265,11 @@
               <h2 class="font-bold text-muted-foreground text-sm">You</h2>
               <p>{message.text}</p>
             </div>
+          {:else if message.role === "tool"}
+            <div class="flex flex-col">
+              <h2 class="font-bold text-blue-400 text-sm">🔧 Tool Call</h2>
+              <p class="text-blue-300 text-sm">{message.text}</p>
+            </div>
           {/if}
         {/each}
 
@@ -267,6 +283,11 @@
             <div class="flex flex-col">
               <h2 class="font-bold text-muted-foreground text-sm">Agent</h2>
               <p>{agentResponseBuffer}</p>
+            </div>
+          {:else if responseTokenTypeFlag === "tool"}
+            <div class="flex flex-col">
+              <h2 class="font-bold text-blue-400 text-sm">🔧 Calling Tool</h2>
+              <p class="text-blue-300 text-sm">{agentToolCallBuffer}</p>
             </div>
           {/if}
         {/if}

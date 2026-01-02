@@ -5,6 +5,7 @@ import { FilePart, ImagePart, TextPart } from "ai";
 import { z } from "zod";
 import puppeteer from 'puppeteer';
 import { getUrlsFromPage, getSubdomainsFromPage, getEmailsFromPage, getCookiesFromPage, getNetworkRequestsFromPage, getPageContent } from './crawler';
+import { savePage, queryPageDOM, getPageForms, getPageInputs, getScriptChunk, searchInScripts, getPageMetadata, getScriptStats } from './page-storage';
 
 interface Message {
   role: "system" | "user" | "tool" | "assistant"
@@ -16,83 +17,77 @@ const groq = createGroq({
   apiKey: process.env.GROQ_API_KEY!
 });
 
-const mainSystemPrompt = `You are an expert security researcher and penetration tester specializing in web application security. Your role is to systematically analyze websites to identify potential vulnerabilities and security weaknesses.
+// Rough estimate: 1 token ≈ 4 characters, so 1000 tokens ≈ 4000 characters
+const MAX_CHARACTERS = 4000;
 
-## Your Approach
+function truncateResponse(data: any, maxChars: number = MAX_CHARACTERS): string {
+  const jsonString = JSON.stringify(data);
+  if (jsonString.length <= maxChars) {
+    return jsonString;
+  }
+  
+  // If it's an array, try to return fewer items
+  if (Array.isArray(data)) {
+    const truncatedArray = [];
+    let currentLength = 2; // Account for []
+    
+    for (const item of data) {
+      const itemString = JSON.stringify(item);
+      if (currentLength + itemString.length + 1 <= maxChars) {
+        truncatedArray.push(item);
+        currentLength += itemString.length + 1; // +1 for comma
+      } else {
+        break;
+      }
+    }
+    
+    const result = {
+      data: truncatedArray,
+      truncated: true,
+      totalItems: data.length,
+      returnedItems: truncatedArray.length,
+      message: `Response truncated. Showing ${truncatedArray.length} of ${data.length} items to stay within token limits.`
+    };
+    return JSON.stringify(result);
+  }
+  
+  // For objects or strings, truncate directly
+  const truncated = jsonString.substring(0, maxChars - 100);
+  return JSON.stringify({
+    data: truncated,
+    truncated: true,
+    message: "Response truncated to stay within token limits. Use more specific queries or filters."
+  });
+}
 
-1. **Reconnaissance Phase**
-   - Start by gathering information about the target website
-   - Identify all URLs, subdomains, and entry points
-   - Examine network requests to understand API endpoints and third-party integrations
-   - Analyze cookies for sensitive data exposure or security flags (HttpOnly, Secure, SameSite)
+const mainSystemPrompt = `## Role
+Expert security researcher & penetration tester specializing in web app security.
 
-2. **Attack Surface Analysis**
-   - Identify all input fields (forms, search bars, URL parameters, headers)
-   - Look for file upload functionality
-   - Find authentication and authorization endpoints
-   - Locate admin panels or sensitive directories
-   - Examine JavaScript files for hardcoded credentials, API keys, or logic flaws
-   - Check for exposed configuration files or debugging endpoints
+## Methodology
+1. **Reconnaissance** – Gather URLs, subdomains, endpoints, cookies, and network requests.
+2. **Save Page** – Always use **getPageContent** first to save page to database before analysis.
+3. **Analyze** – Use targeted tools:  
+   - \`getScriptStats\` / \`searchInScripts\` / \`getScriptChunk\` (JS analysis)  
+   - \`getPageForms\` / \`getPageInputs\` (input discovery)  
+   - \`queryPageDOM\` / \`getPageMetadata\` (page structure)
+4. **Identify Attack Surface** – Input fields, auth endpoints, uploads, admin panels, exposed secrets.
+5. **Test for Vulnerabilities** – Focus on:  
+   - **Injection** (SQLi, XSS, command, template)  
+   - **Auth & Access Control** (weak auth, IDOR, session issues)  
+   - **Configuration** (security headers, cookie flags, exposed keys)  
+   - **Business Logic** (rate limits, race conditions, validation flaws)
+6. **Report** – For each finding: Vulnerability Type, Location, Severity, Evidence, Recommended Fix.
 
-3. **Vulnerability Identification**
-   Focus on these common vulnerability categories:
-   
-   **Injection Vulnerabilities:**
-   - SQL Injection: Look for database queries in inputs, URL parameters, or cookies
-   - XSS (Cross-Site Scripting): Identify places where user input is reflected in the page
-   - Command Injection: Find system command execution points
-   - Template Injection: Check for server-side template rendering with user input
-   
-   **Authentication & Authorization:**
-   - Weak password policies
-   - Missing authentication on sensitive endpoints
-   - Broken access controls (IDOR, privilege escalation)
-   - Session fixation or hijacking vulnerabilities
-   
-   **Configuration & Exposure:**
-   - Missing security headers (CSP, X-Frame-Options, HSTS)
-   - Sensitive data in cookies without proper flags
-   - Exposed API keys or secrets in JavaScript
-   - Information disclosure (error messages, stack traces)
-   - CORS misconfigurations
-   
-   **Business Logic Flaws:**
-   - Rate limiting issues
-   - Race conditions
-   - Insufficient validation of user actions
-   - Price manipulation or bypassing payment flows
+## Key Guidelines
+- Always save page with \`getPageContent\` before deep analysis.
+- Use specialized tools, not raw content retrieval.
+- Prioritize by risk: authentication > injection > information disclosure.
+- Verify findings; avoid disruption.
+- Test only with explicit permission.
 
-4. **Tool Selection & Testing**
-   - Use available tools methodically to test your hypotheses
-   - Start with passive reconnaissance tools (findUrls, getNetworkRequests, getCookies)
-   - Proceed to active testing tools (XSS, SQL injection, etc.) on identified targets
-   - Document findings with severity levels (Critical, High, Medium, Low)
-
-5. **Reporting**
-   For each finding, provide:
-   - **Vulnerability Type**: Name and category
-   - **Location**: URL, parameter, or component affected
-   - **Severity**: Based on exploitability and impact
-   - **Evidence**: What you observed that indicates the vulnerability
-   - **Recommended Fix**: How to remediate the issue
-
-## Important Guidelines
-
-- Be systematic and thorough - don't skip reconnaissance
-- Prioritize testing based on risk (authentication > injection > information disclosure)
-- Always verify findings before reporting
-- Explain your reasoning when selecting tests to run
-- If a tool returns an error, adapt your strategy
-- Focus on actionable findings that can be demonstrated
-
-## Ethical Considerations
-
-- Only test targets that the user has explicit permission to test
-- Avoid causing damage or disruption (no DoS attacks)
-- Don't exfiltrate or store sensitive user data
-- Report findings responsibly
-
-Begin each assessment by understanding the target scope and then systematically work through the reconnaissance and testing phases.`
+## Ethical Rules
+- No DoS, no damage, no exfiltration of user data.
+- Report responsibly.`
 
 const tools: ToolSet = {
   findUrls: {
@@ -105,7 +100,7 @@ const tools: ToolSet = {
       try {
         const urls = await getUrlsFromPage(browser, url);
         await browser.close();
-        return JSON.stringify(urls);
+        return truncateResponse(urls);
       } catch (error) {
         await browser.close();
         throw error;
@@ -123,7 +118,7 @@ const tools: ToolSet = {
       try {
         const subdomains = await getSubdomainsFromPage(browser, url, baseDomain);
         await browser.close();
-        return JSON.stringify(subdomains);
+        return truncateResponse(subdomains);
       } catch (error) {
         await browser.close();
         throw error;
@@ -140,7 +135,7 @@ const tools: ToolSet = {
       try {
         const emails = await getEmailsFromPage(browser, url);
         await browser.close();
-        return JSON.stringify(emails);
+        return truncateResponse(emails);
       } catch (error) {
         await browser.close();
         throw error;
@@ -157,7 +152,7 @@ const tools: ToolSet = {
       try {
         const cookies = await getCookiesFromPage(browser, url);
         await browser.close();
-        return JSON.stringify(cookies);
+        return truncateResponse(cookies);
       } catch (error) {
         await browser.close();
         throw error;
@@ -174,7 +169,7 @@ const tools: ToolSet = {
       try {
         const requests = await getNetworkRequestsFromPage(browser, url);
         await browser.close();
-        return JSON.stringify(requests);
+        return truncateResponse(requests);
       } catch (error) {
         await browser.close();
         throw error;
@@ -182,29 +177,139 @@ const tools: ToolSet = {
     }
   },
   getPageContent: {
-    description: "Tool to retrieve the visible text content and HTML source code of a web page. Useful for analyzing page structure, finding forms, input fields, JavaScript code, or sensitive information in the page source.",
+    description: "Tool to retrieve and save the visible text content and HTML source code of a web page to the database. This crawls the page and stores it for later analysis. Use this first before using other page analysis tools.",
     inputSchema: z.object({
-      url: z.url().describe("URL of the webpage to get content from")
+      url: z.string().url().describe("URL of the webpage to save")
     }),
     execute: async ({url}) => {
       const browser = await puppeteer.launch();
       try {
         const content = await getPageContent(browser, url);
         await browser.close();
-        return JSON.stringify(content);
+        
+        if (!content) {
+          return JSON.stringify({ error: "Failed to get page content" });
+        }
+        
+        // Save to database
+        const pageId = await savePage(url, content.html, content.scripts);
+        
+        const result = { 
+          success: true, 
+          pageId,
+          url,
+          message: "Page saved to database. Use other tools to analyze specific parts of the page.",
+          stats: {
+            textLength: content.text.length,
+            htmlLength: content.html.length,
+            scriptCount: content.scripts.length
+          }
+        };
+
+        console.log(result);
+
+        return JSON.stringify(result);
       } catch (error) {
         await browser.close();
         throw error;
       }
     }
+  },
+  queryPageDOM: {
+    description: "Query saved page content using CSS selectors. Returns matching elements with their tag, text, attributes, and HTML. Use this to find specific elements like forms, buttons, divs, etc.",
+    inputSchema: z.object({
+      url: z.string().url().describe("URL of the saved page"),
+      selector: z.string().describe("CSS selector to query (e.g., 'form', 'input[type=password]', '.admin-panel', '#login-form')")
+    }),
+    execute: async ({url, selector}) => {
+      const results = await queryPageDOM(url, selector);
+      return truncateResponse(results);
+    }
+  },
+  getPageForms: {
+    description: "Get all forms from a saved page, including their action URLs, methods, and input fields. Essential for testing form-based vulnerabilities.",
+    inputSchema: z.object({
+      url: z.string().url().describe("URL of the saved page")
+    }),
+    execute: async ({url}) => {
+      const forms = await getPageForms(url);
+      return truncateResponse(forms);
+    }
+  },
+  getPageInputs: {
+    description: "Get all input fields from a saved page including their types, names, values, and surrounding context. Useful for identifying injection points.",
+    inputSchema: z.object({
+      url: z.string().url().describe("URL of the saved page")
+    }),
+    execute: async ({url}) => {
+      const inputs = await getPageInputs(url);
+      return truncateResponse(inputs);
+    }
+  },
+  getScriptChunk: {
+    description: "Get a specific chunk of JavaScript code from a saved page by line numbers. Use this to examine specific parts of scripts after finding interesting patterns.",
+    inputSchema: z.object({
+      url: z.string().url().describe("URL of the saved page"),
+      startLine: z.number().describe("Starting line number (1-based)"),
+      endLine: z.number().describe("Ending line number (inclusive)")
+    }),
+    execute: async ({url, startLine, endLine}) => {
+      const chunk = await getScriptChunk(url, startLine, endLine);
+      // Limit script chunks to prevent excessive token usage
+      if (chunk.length > MAX_CHARACTERS) {
+        return JSON.stringify({
+          data: chunk.substring(0, MAX_CHARACTERS),
+          truncated: true,
+          originalLength: chunk.length,
+          message: `Script chunk truncated. Original had ${chunk.length} characters. Consider requesting a smaller line range.`
+        });
+      }
+      return chunk;
+    }
+  },
+  searchInScripts: {
+    description: "Search for patterns in JavaScript code from a saved page. Returns matching lines with context. Use to find API keys, credentials, endpoints, etc.",
+    inputSchema: z.object({
+      url: z.string().url().describe("URL of the saved page"),
+      pattern: z.string().describe("Search pattern (string or regex pattern)"),
+      isRegex: z.boolean().optional().describe("Whether the pattern is a regex (default: false)")
+    }),
+    execute: async ({url, pattern, isRegex}) => {
+      const results = await searchInScripts(url, pattern, isRegex || false);
+      return truncateResponse(results);
+    }
+  },
+  getPageMetadata: {
+    description: "Get page metadata including title, meta tags, headers (h1-h6), and links. Useful for understanding page structure and finding hidden endpoints.",
+    inputSchema: z.object({
+      url: z.string().url().describe("URL of the saved page")
+    }),
+    execute: async ({url}) => {
+      const metadata = await getPageMetadata(url);
+      return truncateResponse(metadata);
+    }
+  },
+  getScriptStats: {
+    description: "Get statistics about JavaScript on a saved page: total lines, script count, presence of API keys, console logs, localStorage usage, cookie access, and external API calls.",
+    inputSchema: z.object({
+      url: z.string().url().describe("URL of the saved page")
+    }),
+    execute: async ({url}) => {
+      const stats = await getScriptStats(url);
+      return truncateResponse(stats);
+    }
   }
 }
 
-export async function* streamAgentResponse(messages: Message[], url: string) {
+export async function* streamAgentResponse(messages: Message[], url: string, projectId: string) {
+  // Keep only recent messages to avoid context overflow
+  const MAX_MESSAGES = 10;
+  const recentMessages = messages.slice(-MAX_MESSAGES);
+  
   const { fullStream } = streamText({
-    model: groq("moonshotai/kimi-k2-instruct-0905"),
+    model: groq("llama-3.3-70b-versatile"),
     system: `${mainSystemPrompt} website: ${url}`,
-    messages: messages.map((message) => {
+    messages: recentMessages.map((message) => {
       if (message.text) {
         return {
           role: message.role as "system" | "user" | "assistant",
