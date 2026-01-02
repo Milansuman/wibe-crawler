@@ -8,7 +8,7 @@
   import type { PageProps } from "./$types";
   import { safeRPC } from "$lib/api-client";
   import { toast } from "svelte-sonner";
-  import {Send, StopCircle, Trash} from "lucide-svelte";
+  import {Send, StopCircle, Trash, Loader2} from "lucide-svelte";
   import SvelteMarkdown from "svelte-markdown";
 
   interface Project {
@@ -22,6 +22,11 @@
     projectId: string;
     role: "user" | "system" | "assistant" | "tool" | null;
     text: string | null;
+  }
+
+  interface StreamingMessage {
+    role: "assistant" | "reasoning" | "tool";
+    text: string;
   }
 
   const { data: initialPageData }: PageProps = $props();
@@ -41,10 +46,9 @@
   let newProjectDialogOpen = $state(false);
 
   let promptInput = $state("");
-  let agentResponseReasoningBuffer = $state("");
-  let agentResponseBuffer = $state("");
-  let agentToolCallBuffer = $state("");
-  let responseTokenTypeFlag = $state<"text" | "reasoning" | "tool" | undefined>();
+  let streamingMessages = $state<StreamingMessage[]>([]);
+  let currentBuffer = $state("");
+  let currentType = $state<"text" | "reasoning" | "tool" | undefined>();
   let projectMessages = $state<ProjectMessage[]>([]);
   let isStreaming = $state(false);
   let abortController = $state<AbortController | undefined>();
@@ -100,62 +104,51 @@
           return;
         }
 
-        const {done, value} = await responseStream.next();
-        if(!done){
-          const firstToken = (value as unknown as {type: "text" | "reasoning" | "tool", content: string})
-          responseTokenTypeFlag = firstToken.type;
-          if(responseTokenTypeFlag === "text"){
-            agentResponseBuffer += firstToken.content;
-          }else if(responseTokenTypeFlag === "reasoning"){
-            agentResponseReasoningBuffer += firstToken.content;
-          }else if(responseTokenTypeFlag === "tool"){
-            agentToolCallBuffer += firstToken.content;
-          }
-        }
-
         for await (const responseObject of responseStream){
-
-          if(responseObject.type === "text"){
-            if(responseObject.type !== responseTokenTypeFlag){
-              const messageText = agentResponseBuffer; //ensure it isn't the state
+          // If type changed, save current buffer to streaming messages array
+          if(currentType && responseObject.type !== currentType && currentBuffer.length > 0){
+            const role = currentType === "text" ? "assistant" : currentType === "reasoning" ? "reasoning" : "tool";
+            streamingMessages.push({
+              role,
+              text: currentBuffer
+            });
+            
+            // Also push to project messages if it's text
+            if(currentType === "text"){
               projectMessages.push({
                 id: "deadbeef",
                 projectId: currentProject.id,
                 role: "assistant",
-                text: messageText
-              })
-              agentResponseBuffer = "";
-              responseTokenTypeFlag = responseObject.type;
+                text: currentBuffer
+              });
             }
-
-            agentResponseBuffer += responseObject.content;
-          }else if(responseObject.type === "reasoning"){
-            if(responseObject.type !== responseTokenTypeFlag){
-              agentResponseReasoningBuffer = "";
-              responseTokenTypeFlag = responseObject.type;
-            }
-
-            agentResponseReasoningBuffer += responseObject.content;
-          }else if(responseObject.type === "tool"){
-            if(responseObject.type !== responseTokenTypeFlag){
-              agentToolCallBuffer = "";
-              responseTokenTypeFlag = responseObject.type;
-            }
-
-            agentToolCallBuffer += responseObject.content;
+            
+            currentBuffer = "";
           }
+
+          currentType = responseObject.type as "tool" | "reasoning" | "text";
+          currentBuffer += responseObject.content;
         }
 
         // Push any remaining buffer content when stream ends
-        if(agentResponseBuffer.length > 0){
-          const messageText = agentResponseBuffer;
-          projectMessages.push({
-            id: "deadbeef",
-            projectId: currentProject.id,
-            role: "assistant",
-            text: messageText
-          })
-          agentResponseBuffer = "";
+        if(currentBuffer.length > 0){
+          const role = currentType === "text" ? "assistant" : currentType === "reasoning" ? "reasoning" : "tool";
+          streamingMessages.push({
+            role,
+            text: currentBuffer
+          });
+          
+          // Also push to project messages if it's text
+          if(currentType === "text"){
+            projectMessages.push({
+              id: "deadbeef",
+              projectId: currentProject.id,
+              role: "assistant",
+              text: currentBuffer
+            });
+          }
+          
+          currentBuffer = "";
         }
       } catch (error: any) {
         if (error.name === 'AbortError') {
@@ -164,9 +157,9 @@
           toast.error("An error occurred");
         }
       } finally {
-        responseTokenTypeFlag = undefined;
-        agentResponseReasoningBuffer = "";
-        agentToolCallBuffer = "";
+        currentType = undefined;
+        streamingMessages = [];
+        currentBuffer = "";
         isStreaming = false;
         abortController = undefined;
       }
@@ -273,21 +266,46 @@
           {/if}
         {/each}
 
-        {#if responseTokenTypeFlag}
-          {#if responseTokenTypeFlag === "reasoning"}
+        {#each streamingMessages as streamMsg}
+          {#if streamMsg.role === "reasoning"}
             <div class="flex flex-col">
               <h2 class="font-bold text-muted-foreground text-sm">Agent (Reasoning)</h2>
-              <p class="text-muted-foreground">{agentResponseReasoningBuffer}</p>
+              <p class="text-muted-foreground">{streamMsg.text}</p>
             </div>
-          {:else if responseTokenTypeFlag === "text"}
+          {:else if streamMsg.role === "assistant"}
             <div class="flex flex-col">
               <h2 class="font-bold text-muted-foreground text-sm">Agent</h2>
-              <p>{agentResponseBuffer}</p>
+              <SvelteMarkdown source={streamMsg.text}/>
             </div>
-          {:else if responseTokenTypeFlag === "tool"}
+          {:else if streamMsg.role === "tool"}
             <div class="flex flex-col">
-              <h2 class="font-bold text-blue-400 text-sm">🔧 Calling Tool</h2>
-              <p class="text-blue-300 text-sm">{agentToolCallBuffer}</p>
+              <h2 class="font-bold text-blue-400 text-sm flex items-center gap-2">
+                <Loader2 class="animate-spin" size={16}/>
+                Calling Tool
+              </h2>
+              <p class="text-blue-300 text-sm">{streamMsg.text}</p>
+            </div>
+          {/if}
+        {/each}
+
+        {#if currentBuffer.length > 0}
+          {#if currentType === "reasoning"}
+            <div class="flex flex-col">
+              <h2 class="font-bold text-muted-foreground text-sm">Agent (Reasoning)</h2>
+              <p class="text-muted-foreground">{currentBuffer}</p>
+            </div>
+          {:else if currentType === "text"}
+            <div class="flex flex-col">
+              <h2 class="font-bold text-muted-foreground text-sm">Agent</h2>
+              <SvelteMarkdown source={currentBuffer}/>
+            </div>
+          {:else if currentType === "tool"}
+            <div class="flex flex-col">
+              <h2 class="font-bold text-blue-400 text-sm flex items-center gap-2">
+                <Loader2 class="animate-spin" size={16}/>
+                Calling Tool
+              </h2>
+              <p class="text-blue-300 text-sm">{currentBuffer}</p>
             </div>
           {/if}
         {/if}

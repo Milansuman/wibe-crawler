@@ -56,26 +56,31 @@ export default {
           if (agentResponse.type === "text" || agentResponse.type === "reasoning") {
             yield agentResponse;
 
-            if (!currentResponseType) {
-              currentResponseType = agentResponse.type;
-            }
-
-            if (currentResponseType !== agentResponse.type && agentResponse.type === "text" && responseBuffer.length > 0) {
+            // Save buffer if type is changing and buffer has content
+            if (currentResponseType && currentResponseType !== agentResponse.type && responseBuffer.length > 0) {
               await saveProjectMessage(input.projectId, "assistant", responseBuffer);
-              currentResponseType = agentResponse.type;
               responseBuffer = "";
             }
+
+            // Update the current type
+            currentResponseType = agentResponse.type;
 
             responseBuffer += agentResponse.content;
           } else if (agentResponse.type === "tool") {
             yield agentResponse;
+            
+            // Save buffer before switching to tool
+            if (responseBuffer.length > 0) {
+              await saveProjectMessage(input.projectId, "assistant", responseBuffer);
+              responseBuffer = "";
+            }
+            
             currentResponseType = "tool";
-            responseBuffer = "";
           }
         }
 
         // Save the final assistant response if there's any content in the buffer
-        if (responseBuffer && currentResponseType === "text") {
+        if (responseBuffer.length > 0) {
           await saveProjectMessage(input.projectId, "assistant", responseBuffer);
         }
 
