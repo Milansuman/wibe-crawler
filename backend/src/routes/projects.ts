@@ -3,7 +3,7 @@ import { authenticated } from "../middleware/auth";
 import {z} from "zod";
 import { db } from "../../lib/db";
 import { projectMessages, projects } from "../../lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import puppeteer from "puppeteer";
 import { getTitleFromPage } from "../../lib/crawler";
 
@@ -38,6 +38,36 @@ export default {
           userId: context.user.id,
           title: pageTitle ?? (new URL(input.url)).hostname,
         }).returning();
+
+        return project;
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
+  updateProject: authenticated
+    .input(z.object({
+      projectId: z.string(),
+      url: z.url().optional(),
+      title: z.string().optional(),
+      cookies: z.string().optional(),
+      localStorage: z.string().optional()
+    }))
+    .handler(async ({input, context}) => {
+      try {
+        const [project] = await db.update(projects)
+          .set({
+            url: input.url,
+            title: input.title,
+            cookies: input.cookies,
+            localStorage: input.localStorage
+          })
+          .where(and(
+            eq(projects.id, input.projectId),
+            eq(projects.userId, context.user.id)
+          ))
+          .returning();
 
         return project;
       } catch (error) {

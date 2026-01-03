@@ -100,7 +100,9 @@ export const projects = pgTable("projects", {
   title: text().notNull(),
   userId: text().references(() => user.id, {
     onDelete: "cascade"
-  }).notNull()
+  }).notNull(),
+  cookies: text(),
+  localStorage: text()
 }).enableRLS();
 
 export const projectMessageTypes = pgEnum("project_message_types", ["system", "user", "assistant", "tool"]);
