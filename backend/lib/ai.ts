@@ -308,7 +308,210 @@ export function generateTools(projectId: string, cookies?: string, localStorage?
         const stats = await getScriptStats(url);
         return truncateResponse(stats);
       }
-    }
+    },
+    nslookup: {
+      description: "Perform DNS lookup using nslookup to resolve domain names and query DNS records (A, MX, NS, TXT, etc.). Useful for reconnaissance and finding mail servers, nameservers, and other DNS information.",
+      inputSchema: z.object({
+        domain: z.string().describe("Domain name to lookup (e.g., 'example.com')"),
+        queryType: z.string().optional().describe("DNS record type to query (A, MX, NS, TXT, CNAME, etc.)"),
+        nameserver: z.string().optional().describe("Specific nameserver to query (e.g., '8.8.8.8')")
+      }),
+      execute: async ({ domain, queryType, nameserver }) => {
+        try {
+          const response = await fetch('http://localhost:8000/scan/nslookup', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              domain,
+              query_type: queryType,
+              nameserver
+            })
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            return JSON.stringify({ error: error.detail || 'nslookup request failed' });
+          }
+
+          const result = await response.json();
+          return truncateResponse(result);
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to connect to tools API: ${error}` });
+        }
+      }
+    },
+    dig: {
+      description: "Perform DNS lookup using dig (Domain Information Groper) for detailed DNS query results. More powerful than nslookup with better formatted output. Query any DNS record type (A, AAAA, MX, NS, TXT, SOA, CNAME, ANY, etc.).",
+      inputSchema: z.object({
+        domain: z.string().describe("Domain name to lookup (e.g., 'example.com')"),
+        queryType: z.string().optional().describe("DNS record type (A, AAAA, MX, NS, TXT, SOA, CNAME, ANY, etc.). Default: A"),
+        nameserver: z.string().optional().describe("Specific nameserver to query (e.g., '8.8.8.8', '1.1.1.1')"),
+        short: z.boolean().optional().describe("Return short/concise output (just the answer). Default: false")
+      }),
+      execute: async ({ domain, queryType, nameserver, short }) => {
+        try {
+          const response = await fetch('http://localhost:8000/scan/dig', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              domain,
+              query_type: queryType || 'A',
+              nameserver,
+              short: short || false
+            })
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            return JSON.stringify({ error: error.detail || 'dig request failed' });
+          }
+
+          const result = await response.json();
+          return truncateResponse(result);
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to connect to tools API: ${error}` });
+        }
+      }
+    },
+    nmap: {
+      description: "Perform network port scanning using Nmap to discover open ports, running services, and service versions. Essential for mapping attack surface. Scan types: basic (quick), service (detect versions), vuln (vulnerability scripts), full (comprehensive).",
+      inputSchema: z.object({
+        target: z.string().describe("Target IP address or hostname to scan"),
+        ports: z.string().optional().describe("Port range to scan (e.g., '80,443' or '1-1000' or '1-65535')"),
+        scanType: z.enum(['basic', 'service', 'vuln', 'full']).optional().describe("Scan type: basic (fast), service (version detection), vuln (vulnerability scan), full (comprehensive). Default: basic")
+      }),
+      execute: async ({ target, ports, scanType }) => {
+        try {
+          const response = await fetch('http://localhost:8000/scan/nmap', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              target,
+              ports,
+              scan_type: scanType || 'basic'
+            })
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            return JSON.stringify({ error: error.detail || 'Nmap scan failed' });
+          }
+
+          const result = await response.json();
+          return truncateResponse(result);
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to connect to tools API: ${error}` });
+        }
+      }
+    },
+    sqlmap: {
+      description: "Test for SQL injection vulnerabilities using SQLmap. Automatically detects and exploits SQL injection flaws. Can enumerate databases, tables, and extract data. Use with caution - only on authorized targets.",
+      inputSchema: z.object({
+        url: z.string().url().describe("Target URL to test for SQL injection"),
+        data: z.string().optional().describe("POST data string (e.g., 'username=admin&password=test')"),
+        cookie: z.string().optional().describe("Cookie string to include in requests"),
+        level: z.number().optional().describe("Level of tests to perform (1-5). Higher = more thorough. Default: 1"),
+        risk: z.number().optional().describe("Risk of tests (1-3). Higher = more aggressive. Default: 1")
+      }),
+      execute: async ({ url, data, cookie, level, risk }) => {
+        try {
+          const response = await fetch('http://localhost:8000/scan/sqlmap', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              url,
+              data,
+              cookie,
+              level: level || 1,
+              risk: risk || 1
+            })
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            return JSON.stringify({ error: error.detail || 'SQLmap scan failed' });
+          }
+
+          const result = await response.json();
+          return truncateResponse(result);
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to connect to tools API: ${error}` });
+        }
+      }
+    },
+    nikto: {
+      description: "Perform web server vulnerability scanning using Nikto. Checks for outdated software, dangerous files, misconfigurations, and common vulnerabilities. Essential for web application security assessment.",
+      inputSchema: z.object({
+        target: z.string().describe("Target hostname or IP address"),
+        port: z.number().optional().describe("Target port number. Default: 80"),
+        ssl: z.boolean().optional().describe("Use SSL/HTTPS. Default: false")
+      }),
+      execute: async ({ target, port, ssl }) => {
+        try {
+          const response = await fetch('http://localhost:8000/scan/nikto', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              target,
+              port: port || 80,
+              ssl: ssl || false
+            })
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            return JSON.stringify({ error: error.detail || 'Nikto scan failed' });
+          }
+
+          const result = await response.json();
+          return truncateResponse(result);
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to connect to tools API: ${error}` });
+        }
+      }
+    },
+    whatweb: {
+      description: "Identify web technologies, frameworks, CMS, JavaScript libraries, web servers, and more using WhatWeb. Perfect for technology fingerprinting and reconnaissance. Aggression levels: 1 (stealthy), 2 (normal), 3 (aggressive), 4 (heavy).",
+      inputSchema: z.object({
+        target: z.string().url().describe("Target URL to scan"),
+        aggression: z.number().optional().describe("Aggression level (1-4). Higher = more requests/thorough. Default: 1")
+      }),
+      execute: async ({ target, aggression }) => {
+        try {
+          const response = await fetch('http://localhost:8000/scan/whatweb', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              target,
+              aggression: aggression || 1
+            })
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            return JSON.stringify({ error: error.detail || 'WhatWeb scan failed' });
+          }
+
+          const result = await response.json();
+          return truncateResponse(result);
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to connect to tools API: ${error}` });
+        }
+      }
+    },
+    
   }
 
   return tools;

@@ -37,6 +37,24 @@ services:
       - dvwa:/var/lib/mysql
     restart: unless-stopped
 
+  security-tools-api:
+    build:
+      context: ./tools-api
+      dockerfile: Dockerfile
+    container_name: security-tools-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    # Run with elevated privileges for network scanning
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # Volume for persistence (optional)
+    volumes:
+      - ./logs:/app/logs
+
 volumes:
   postgres_data:
   dvwa:

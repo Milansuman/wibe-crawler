@@ -40,6 +40,17 @@ class WhatwebScanRequest(BaseModel):
     target: str = Field(..., description="Target URL")
     aggression: Optional[int] = Field(1, description="Aggression level (1-4)")
 
+class NslookupRequest(BaseModel):
+    domain: str = Field(..., description="Domain name to lookup")
+    query_type: Optional[str] = Field(None, description="Query type (A, MX, NS, TXT, etc.)")
+    nameserver: Optional[str] = Field(None, description="Specific nameserver to query")
+
+class DigRequest(BaseModel):
+    domain: str = Field(..., description="Domain name to lookup")
+    query_type: Optional[str] = Field("A", description="Query type (A, MX, NS, TXT, ANY, etc.)")
+    nameserver: Optional[str] = Field(None, description="Specific nameserver to query (@server)")
+    short: Optional[bool] = Field(False, description="Short output format")
+
 
 def run_command(command: List[str], timeout: int = 300) -> Dict[str, Any]:
     """Execute a command and return structured output"""
@@ -155,6 +166,86 @@ def parse_nikto_output(output: str) -> Dict[str, Any]:
     return parsed
 
 
+def parse_nslookup_output(output: str) -> Dict[str, Any]:
+    """Parse nslookup output into structured JSON"""
+    parsed = {
+        "server": "",
+        "addresses": [],
+        "records": []
+    }
+    
+    # Extract server info
+    server_pattern = r"Server:\s+(.+)"
+    server_match = re.search(server_pattern, output)
+    if server_match:
+        parsed["server"] = server_match.group(1).strip()
+    
+    # Extract addresses
+    address_pattern = r"Address(?:es)?:\s+(.+)"
+    address_matches = re.findall(address_pattern, output)
+    parsed["addresses"] = [addr.strip() for addr in address_matches]
+    
+    # Extract name records
+    name_pattern = r"Name:\s+(.+)"
+    name_matches = re.findall(name_pattern, output)
+    if name_matches:
+        for name in name_matches:
+            parsed["records"].append({"name": name.strip()})
+    
+    return parsed
+
+
+def parse_dig_output(output: str) -> Dict[str, Any]:
+    """Parse dig output into structured JSON"""
+    parsed = {
+        "question": {},
+        "answer": [],
+        "authority": [],
+        "additional": [],
+        "stats": {}
+    }
+    
+    # Extract question section
+    question_pattern = r";; QUESTION SECTION:[\s\S]*?;(.+?)\s+(\w+)\s+(\w+)"
+    question_match = re.search(question_pattern, output)
+    if question_match:
+        parsed["question"] = {
+            "name": question_match.group(1).strip(),
+            "class": question_match.group(2),
+            "type": question_match.group(3)
+        }
+    
+    # Extract answer section
+    answer_pattern = r";; ANSWER SECTION:([\s\S]*?)(?:;;|\n\n)"
+    answer_match = re.search(answer_pattern, output)
+    if answer_match:
+        answer_lines = [line.strip() for line in answer_match.group(1).split('\n') if line.strip() and not line.startswith(';')]
+        for line in answer_lines:
+            parts = line.split()
+            if len(parts) >= 5:
+                parsed["answer"].append({
+                    "name": parts[0],
+                    "ttl": parts[1],
+                    "class": parts[2],
+                    "type": parts[3],
+                    "data": ' '.join(parts[4:])
+                })
+    
+    # Extract query time
+    query_time_pattern = r";; Query time: (\d+) msec"
+    query_time_match = re.search(query_time_pattern, output)
+    if query_time_match:
+        parsed["stats"]["query_time_ms"] = int(query_time_match.group(1))
+    
+    # Extract server
+    server_pattern = r";; SERVER: (.+)"
+    server_match = re.search(server_pattern, output)
+    if server_match:
+        parsed["stats"]["server"] = server_match.group(1).strip()
+    
+    return parsed
+
+
 @app.get("/")
 def read_root():
     return {
@@ -164,6 +255,8 @@ def read_root():
             "sqlmap": "/scan/sqlmap",
             "nikto": "/scan/nikto",
             "whatweb": "/scan/whatweb",
+            "nslookup": "/scan/nslookup",
+            "dig": "/scan/dig",
             "health": "/health"
         }
     }
@@ -176,7 +269,9 @@ def health_check():
         "nmap": False,
         "sqlmap": False,
         "nikto": False,
-        "whatweb": False
+        "whatweb": False,
+        "nslookup": False,
+        "dig": False
     }
     
     for tool in tools.keys():
@@ -304,6 +399,75 @@ def whatweb_scan(request: WhatwebScanRequest):
             "raw_output": result["stdout"],
             "error": "Failed to parse JSON output"
         }
+
+
+@app.post("/scan/nslookup")
+def nslookup_scan(request: NslookupRequest):
+    """Run nslookup and return structured results"""
+    command = ["nslookup"]
+    
+    # Add query type if specified
+    if request.query_type:
+        command.extend(["-type=" + request.query_type])
+    
+    # Add domain
+    command.append(request.domain)
+    
+    # Add nameserver if specified
+    if request.nameserver:
+        command.append(request.nameserver)
+    
+    # Execute command
+    result = run_command(command)
+    
+    # nslookup returns non-zero for NXDOMAIN but still provides useful output
+    if result["returncode"] not in [0, 1]:
+        raise HTTPException(status_code=400, detail=f"nslookup failed: {result['stderr']}")
+    
+    # Parse and return structured output
+    parsed = parse_nslookup_output(result["stdout"])
+    parsed["raw_output"] = result["stdout"]
+    
+    return parsed
+
+
+@app.post("/scan/dig")
+def dig_scan(request: DigRequest):
+    """Run dig and return structured results"""
+    command = ["dig"]
+    
+    # Add nameserver if specified
+    if request.nameserver:
+        command.append(f"@{request.nameserver}")
+    
+    # Add domain
+    command.append(request.domain)
+    
+    # Add query type
+    command.append(request.query_type)
+    
+    # Add short flag if requested
+    if request.short:
+        command.append("+short")
+    
+    # Execute command
+    result = run_command(command)
+    
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=f"dig failed: {result['stderr']}")
+    
+    # Parse and return structured output
+    if request.short:
+        # For short output, just return the raw lines
+        lines = [line.strip() for line in result["stdout"].strip().split('\n') if line.strip()]
+        return {
+            "short_answer": lines,
+            "raw_output": result["stdout"]
+        }
+    else:
+        parsed = parse_dig_output(result["stdout"])
+        parsed["raw_output"] = result["stdout"]
+        return parsed
 
 
 if __name__ == "__main__":
