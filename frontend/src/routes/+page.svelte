@@ -8,18 +8,27 @@
   import type { PageProps } from "./$types";
   import { safeRPC } from "$lib/api-client";
   import { toast } from "svelte-sonner";
-  import {Send, StopCircle, Trash, Loader2, Settings} from "lucide-svelte";
+  import {
+    Send,
+    StopCircle,
+    Trash,
+    Loader2,
+    Settings,
+    Check,
+  } from "lucide-svelte";
   import SvelteMarkdown from "svelte-markdown";
+  import {Spinner} from "$lib/components/ui/spinner";
+  import * as Tabs from "$lib/components/ui/tabs";
 
   interface Project {
     id: string;
     title: string;
     url: string;
     cookies: string | null;
-    localStorage: string | null;
+    localStorage: any | null;
   }
 
-  interface ProjectMessage{
+  interface ProjectMessage {
     id: string;
     projectId: string;
     role: "user" | "system" | "assistant" | "tool" | null;
@@ -29,6 +38,14 @@
   interface StreamingMessage {
     role: "assistant" | "reasoning" | "tool";
     text: string;
+  }
+
+  interface PageUrl {
+    id: string;
+    projectId: string;
+    url: string;
+    js: string | null;
+    html: string | null;
   }
 
   const { data: initialPageData }: PageProps = $props();
@@ -56,6 +73,10 @@
   let abortController = $state<AbortController | undefined>();
   let settingsDialogOpen = $state(false);
   let settingsLoading = $state(false);
+  let projectUrls = $state<PageUrl[]>([]);
+  let selectedUrl = $state<PageUrl | undefined>();
+  let urlDetailsDialogOpen = $state(false);
+  let urlDetailsTab = $state<"html" | "js">("html");
 
   // Handlers
   const handleNewProject = async (event: SubmitEvent) => {
@@ -80,53 +101,66 @@
   };
 
   const handleAgentPrompt = async () => {
-    if(promptInput.length > 0 && currentProject){
+    if (promptInput.length > 0 && currentProject) {
       isStreaming = true;
       abortController = new AbortController();
 
       const promptText = promptInput; //stop promptInput state change from affecting projectMessages
       promptInput = ""; // Clear input immediately
-      
+
       projectMessages.push({
         id: "deadbeef",
         projectId: currentProject.id,
         role: "user",
-        text: promptText
-      })
+        text: promptText,
+      });
 
       try {
-        const {data: responseStream, error} = await safeRPC.agent.getAgentResponse({
-          prompt: promptText,
-          projectId: currentProject.id
-        }, {
-          signal: abortController.signal
-        });
+        const { data: responseStream, error } =
+          await safeRPC.agent.getAgentResponse(
+            {
+              prompt: promptText,
+              projectId: currentProject.id,
+            },
+            {
+              signal: abortController.signal,
+            },
+          );
 
-        if(error){
+        if (error) {
           console.log(error);
           toast.error(error.message);
           return;
         }
 
-        for await (const responseObject of responseStream){
+        for await (const responseObject of responseStream) {
           // If type changed, save current buffer to streaming messages array
-          if(currentType && responseObject.type !== currentType && currentBuffer.length > 0){
-            const role = currentType === "text" ? "assistant" : currentType === "reasoning" ? "reasoning" : "tool";
+          if (
+            currentType &&
+            responseObject.type !== currentType &&
+            currentBuffer.length > 0
+          ) {
+            const role =
+              currentType === "text"
+                ? "assistant"
+                : currentType === "reasoning"
+                  ? "reasoning"
+                  : "tool";
             streamingMessages.push({
               role,
-              text: currentBuffer
+              text: currentBuffer,
             });
-            
+
             // Also push to project messages if it's text
-            if(currentType === "text"){
+            if (currentType === "text") {
               projectMessages.push({
                 id: "deadbeef",
                 projectId: currentProject.id,
                 role: "assistant",
-                text: currentBuffer
+                text: currentBuffer,
               });
             }
-            
+
             currentBuffer = "";
           }
 
@@ -135,27 +169,32 @@
         }
 
         // Push any remaining buffer content when stream ends
-        if(currentBuffer.length > 0){
-          const role = currentType === "text" ? "assistant" : currentType === "reasoning" ? "reasoning" : "tool";
+        if (currentBuffer.length > 0) {
+          const role =
+            currentType === "text"
+              ? "assistant"
+              : currentType === "reasoning"
+                ? "reasoning"
+                : "tool";
           streamingMessages.push({
             role,
-            text: currentBuffer
+            text: currentBuffer,
           });
-          
+
           // Also push to project messages if it's text
-          if(currentType === "text"){
+          if (currentType === "text") {
             projectMessages.push({
               id: "deadbeef",
               projectId: currentProject.id,
               role: "assistant",
-              text: currentBuffer
+              text: currentBuffer,
             });
           }
-          
+
           currentBuffer = "";
         }
       } catch (error: any) {
-        if (error.name === 'AbortError') {
+        if (error.name === "AbortError") {
           toast.info("Response stopped");
         } else {
           toast.error("An error occurred");
@@ -168,43 +207,46 @@
         abortController = undefined;
       }
     }
-  }
+  };
 
   const handleStopResponse = () => {
     if (abortController) {
       abortController.abort();
     }
-  }
+  };
 
   const handleClearChat = async () => {
-    if(!currentProject) return;
+    if (!currentProject) return;
 
     await safeRPC.projects.clearProjectMessages({
-      projectId: currentProject.id
+      projectId: currentProject.id,
     });
     projectMessages = [];
-  }
+  };
 
   const handleUpdateProject = async (event: SubmitEvent) => {
     event.preventDefault();
     if (!currentProject) return;
-    
+
     settingsLoading = true;
     const formData = new FormData(event.currentTarget as HTMLFormElement);
-    
-    const { data: updatedProject, error } = await safeRPC.projects.updateProject({
-      projectId: currentProject.id,
-      url: formData.get("url") as string || undefined,
-      title: formData.get("title") as string || undefined,
-      cookies: formData.get("cookies") as string || undefined,
-      localStorage: formData.get("localStorage") as string || undefined,
-    });
+
+    const { data: updatedProject, error } =
+      await safeRPC.projects.updateProject({
+        projectId: currentProject.id,
+        url: (formData.get("url") as string) || undefined,
+        title: (formData.get("title") as string) || undefined,
+        cookies: (formData.get("cookies") as string) || undefined,
+        localStorage: (formData.get("localStorage") as string) || undefined,
+      });
 
     if (error) {
       toast.error(error.message);
     } else {
       // Update the project in the projects list
-      const projectIndex = projects.findIndex(p => p.id === updatedProject.id);
+      const projectIndex = projects.findIndex(
+        (p) => p.id === updatedProject.id,
+      );
       if (projectIndex !== -1) {
         projects[projectIndex] = updatedProject;
       }
@@ -212,31 +254,44 @@
       toast.success("Project updated successfully");
       settingsDialogOpen = false;
     }
-    
+
     settingsLoading = false;
-  }
+  };
 
   // Effects
   $effect(() => {
-    if(currentProject){
+    if (currentProject) {
       (async () => {
-        const {data, error} = await safeRPC.projects.getProjectMessages({
-          projectId: currentProject.id
+        const { data, error } = await safeRPC.projects.getProjectMessages({
+          projectId: currentProject.id,
         });
 
-        if(error){
+        if (error) {
           toast.error(error.message);
           return;
         }
 
         projectMessages = data;
       })();
+
+      (async () => {
+        const { data, error } = await safeRPC.projects.getProjectUrls({
+          projectId: currentProject.id,
+        });
+
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+
+        projectUrls = data;
+      })();
     }
-  })
+  });
 </script>
 
-<div class="flex flex-row gap-6 p-2 w-full h-full overflow-hidden">
-  <nav class="flex flex-col gap-3 w-56 h-full shrink-0">
+<div class="flex flex-row gap-6 p-6 w-full h-full overflow-hidden">
+  <nav class="flex flex-col gap-3 w-56 h-full">
     <Dialog.Root
       open={newProjectDialogOpen}
       onOpenChange={(open) => (newProjectDialogOpen = open)}
@@ -273,49 +328,78 @@
 
   {#if currentProject}
     <Dialog.Root
+      open={urlDetailsDialogOpen}
+      onOpenChange={(open) => (urlDetailsDialogOpen = open)}
+    >
+      <Dialog.Content class="dark text-foreground max-w-4xl max-h-[80vh] flex flex-col overflow-hidden">
+        <Dialog.Header class="flex-shrink-0">
+          <Dialog.Title>URL Details</Dialog.Title>
+          <Dialog.Description class="break-all"
+            >{selectedUrl?.url}</Dialog.Description
+          >
+        </Dialog.Header>
+        {#if selectedUrl}
+          <Tabs.Root bind:value={urlDetailsTab} class="flex flex-col overflow-hidden flex-1 min-h-0">
+            <Tabs.List class="w-full flex-shrink-0">
+              <Tabs.Trigger value="html" class="flex-1">HTML</Tabs.Trigger>
+              <Tabs.Trigger value="js" class="flex-1">JavaScript</Tabs.Trigger>
+            </Tabs.List>
+            <Tabs.Content value="html" class="overflow-auto flex-1 min-h-0">
+              <pre
+                class="bg-secondary p-4 rounded-md text-xs"><code class="whitespace-pre-wrap break-all">{selectedUrl.html || "No HTML content"}</code></pre>
+            </Tabs.Content>
+            <Tabs.Content value="js" class="overflow-auto flex-1 min-h-0">
+              <pre
+                class="bg-secondary p-4 rounded-md text-xs"><code class="whitespace-pre-wrap break-all">{selectedUrl.js || "No JavaScript content"}</code></pre>
+            </Tabs.Content>
+          </Tabs.Root>
+        {/if}
+      </Dialog.Content>
+    </Dialog.Root>
+    <Dialog.Root
       open={settingsDialogOpen}
       onOpenChange={(open) => (settingsDialogOpen = open)}
     >
       <Dialog.Content class="dark text-foreground">
         <Dialog.Header>
           <Dialog.Title>Project Settings</Dialog.Title>
-          <Dialog.Description>
-            Update project configuration
-          </Dialog.Description>
+          <Dialog.Description>Update project configuration</Dialog.Description>
         </Dialog.Header>
         <form class="flex flex-col gap-4" onsubmit={handleUpdateProject}>
           <div class="flex flex-col gap-2">
             <label for="title" class="text-sm font-medium">Title</label>
-            <Input 
+            <Input
               id="title"
-              name="title" 
+              name="title"
               placeholder="Project title"
               value={currentProject.title}
             />
           </div>
           <div class="flex flex-col gap-2">
             <label for="url" class="text-sm font-medium">URL</label>
-            <Input 
+            <Input
               id="url"
               type="url"
-              name="url" 
+              name="url"
               placeholder="https://example.com"
               value={currentProject.url}
             />
           </div>
           <div class="flex flex-col gap-2">
             <label for="cookies" class="text-sm font-medium">Cookies</label>
-            <textarea 
+            <textarea
               id="cookies"
               name="cookies"
               class="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-              placeholder='Session=123&Cookie=456 etc'
+              placeholder="Session=123&Cookie=456 etc"
               value={currentProject.cookies || ""}
             ></textarea>
           </div>
           <div class="flex flex-col gap-2">
-            <label for="localStorage" class="text-sm font-medium">Local Storage</label>
-            <textarea 
+            <label for="localStorage" class="text-sm font-medium"
+              >Local Storage</label
+            >
+            <textarea
               id="localStorage"
               name="localStorage"
               class="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
@@ -323,10 +407,10 @@
             ></textarea>
           </div>
           <div class="flex gap-2 justify-end">
-            <Button 
-              type="button" 
+            <Button
+              type="button"
               variant="outline"
-              onclick={() => settingsDialogOpen = false}
+              onclick={() => (settingsDialogOpen = false)}
               disabled={settingsLoading}
             >
               Cancel
@@ -339,108 +423,137 @@
       </Dialog.Content>
     </Dialog.Root>
     <div
-      class="bg-card w-full h-full rounded-xl flex flex-col border border-border min-w-0 relative"
+      class="bg-card rounded-xl flex flex-col border border-border w-full h-full"
     >
-      <div
-        class="flex flex-row p-4 border-b border-border overflow-hidden w-full min-h-20 items-center"
-      >
+      <div class="flex flex-row p-3 border-b border-border items-center">
         <div class="flex flex-col max-w-[70%]">
-          <h1 class="text-xl truncate">{currentProject.title}</h1>
-          <p class="text-muted-foreground">{currentProject.url}</p>
+          <h1 class="text-md truncate">{currentProject.title.slice(0, 50)}</h1>
+          <p class="text-muted-foreground text-sm">{currentProject.url}</p>
         </div>
-        <button 
+        <button
           class="ml-auto hover:text-muted-foreground transition-colors"
-          onclick={() => settingsDialogOpen = true}
+          onclick={() => (settingsDialogOpen = true)}
         >
-          <Settings/>
+          <Settings />
         </button>
       </div>
-      <div class="flex flex-col gap-2 p-4 pb-16 overflow-auto">
-        {#each projectMessages as message}
-          {#if message.role === "assistant"}
-            <div class="flex flex-col">
-              <h2 class="font-bold text-muted-foreground text-sm">Agent</h2>
-              <SvelteMarkdown source={message.text}/>
-            </div>
-          {:else if message.role === "user"}
-            <div class="flex flex-col ml-auto text-right">
-              <h2 class="font-bold text-muted-foreground text-sm">You</h2>
-              <p>{message.text}</p>
-            </div>
-          {:else if message.role === "tool"}
-            <div class="flex flex-col">
-              <h2 class="font-bold text-blue-400 text-sm">🔧 Tool Call</h2>
-              <p class="text-blue-300 text-sm">{message.text}</p>
-            </div>
-          {/if}
-        {/each}
-
-        {#each streamingMessages as streamMsg}
-          {#if streamMsg.role === "reasoning"}
-            <div class="flex flex-col">
-              <h2 class="font-bold text-muted-foreground text-sm">Agent (Reasoning)</h2>
-              <p class="text-muted-foreground">{streamMsg.text}</p>
-            </div>
-          {:else if streamMsg.role === "assistant"}
-            <div class="flex flex-col">
-              <h2 class="font-bold text-muted-foreground text-sm">Agent</h2>
-              <SvelteMarkdown source={streamMsg.text}/>
-            </div>
-          {:else if streamMsg.role === "tool"}
-            <div class="flex flex-col">
-              <h2 class="font-bold text-blue-400 text-sm flex items-center gap-2">
-                <Loader2 class="animate-spin" size={16}/>
-                Calling Tool
-              </h2>
-              <p class="text-blue-300 text-sm">{streamMsg.text}</p>
-            </div>
-          {/if}
-        {/each}
-
-        {#if currentBuffer.length > 0}
-          {#if currentType === "reasoning"}
-            <div class="flex flex-col">
-              <h2 class="font-bold text-muted-foreground text-sm">Agent (Reasoning)</h2>
-              <p class="text-muted-foreground">{currentBuffer}</p>
-            </div>
-          {:else if currentType === "text"}
-            <div class="flex flex-col">
-              <h2 class="font-bold text-muted-foreground text-sm">Agent</h2>
-              <SvelteMarkdown source={currentBuffer}/>
-            </div>
-          {:else if currentType === "tool"}
-            <div class="flex flex-col">
-              <h2 class="font-bold text-blue-400 text-sm flex items-center gap-2">
-                <Loader2 class="animate-spin" size={16}/>
-                Calling Tool
-              </h2>
-              <p class="text-blue-300 text-sm">{currentBuffer}</p>
-            </div>
-          {/if}
-        {/if}
-      </div>
-      <div class="absolute bottom-0 w-full p-4">
-        <InputGroup.Root class="backdrop-blur-3xl">
-          <InputGroup.Input 
-            bind:value={promptInput}
-            placeholder="Describe your suggestions" 
-            disabled={isStreaming}
-          />
-          <InputGroup.Addon align="inline-end">
-            <InputGroup.Button onclick={handleClearChat} disabled={isStreaming}>
-              <Trash/>
-            </InputGroup.Button>
-            {#if isStreaming}
-              <InputGroup.Button onclick={handleStopResponse}>
-                <StopCircle size={30}/>
-              </InputGroup.Button>
-            {:else}
-              <InputGroup.Button onclick={handleAgentPrompt} disabled={promptInput.length === 0}>
-                <Send size={30}/>
-              </InputGroup.Button>
-            {/if}
-          </InputGroup.Addon>
-        </InputGroup.Root>
+      <div class="flex flex-row flex-1 overflow-hidden">
+        <div class="w-[70%] border-r border-border flex p-4">
+          <!--DASHBOARD-->
+          <Tabs.Root>
+            <Tabs.List>
+              <Tabs.Trigger value="stats">Home</Tabs.Trigger>
+              <Tabs.Trigger value="urls">URLs</Tabs.Trigger>
+              <Tabs.Trigger value="assets">Assets</Tabs.Trigger>
+              <Tabs.Trigger value="stack">Tech Stack</Tabs.Trigger>
+              <Tabs.Trigger value="exploits">Vulnerabilities</Tabs.Trigger>
+            </Tabs.List>
+            <Tabs.Content value="urls" class="overflow-auto">
+              <div class="flex flex-col gap-2 mt-4">
+                {#if projectUrls.length === 0}
+                  <p class="text-muted-foreground text-sm">
+                    No URLs have been crawled yet. Chat with the agent to start
+                    crawling.
+                  </p>
+                {:else}
+                  <div class="space-y-2 overflow-auto">
+                    {#each projectUrls as pageUrl}
+                      <button
+                        class="w-full text-left p-3 rounded-lg border border-border hover:bg-secondary transition-colors"
+                        onclick={() => {
+                          selectedUrl = pageUrl;
+                          urlDetailsDialogOpen = true;
+                          urlDetailsTab = "html";
+                        }}
+                      >
+                        <p class="text-sm font-medium truncate">
+                          {pageUrl.url}
+                        </p>
+                        <div class="flex gap-2 mt-1">
+                          {#if pageUrl.html}
+                            <span
+                              class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
+                              >HTML</span
+                            >
+                          {/if}
+                          {#if pageUrl.js}
+                            <span
+                              class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
+                              >JS</span
+                            >
+                          {/if}
+                        </div>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            </Tabs.Content>
+          </Tabs.Root>
+        </div>
+        <div class="flex flex-col w-[30%] p-4 gap-2">
+          <!--CHAT AREA-->
+          <div class="flex flex-col gap-2 overflow-y-auto text-sm">
+            {#each projectMessages as projectMessage}
+              {#if projectMessage.role === "assistant"}
+                <SvelteMarkdown source={projectMessage.text} />
+              {:else if projectMessage.role === "user"}
+                <div class="w-3/4 ml-auto p-2 rounded-lg border border-border">
+                  <p>{projectMessage.text}</p>
+                </div>
+              {/if}
+            {/each}
+            {#each streamingMessages as streamMessage}
+              {#if streamMessage.role === "assistant"}
+                <SvelteMarkdown source={streamMessage.text} />
+              {:else if streamMessage.role === "reasoning"}
+                <div class="text-sm text-muted-foreground">
+                  <SvelteMarkdown source={streamMessage.text} />
+                </div>
+              {:else if streamMessage.role === "tool"}
+                <div class="flex flex-row items-center gap-2">
+                  {#if isStreaming && currentType === "tool"}
+                    <Spinner/>
+                  {:else}
+                    <Check />
+                  {/if}
+                  <p>{streamMessage.text}</p>
+                </div>
+              {/if}
+            {/each}
+          </div>
+          <div class="mt-auto pt-4 border-t border-border">
+            <InputGroup.Root>
+              <InputGroup.Textarea
+                placeholder="Ask something about the website..."
+                bind:value={promptInput}
+                disabled={isStreaming}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleAgentPrompt();
+                  }
+                }}
+              />
+              <InputGroup.InputGroupAddon align="block-end" class="flex flex-row justify-end">
+                <InputGroup.Button onclick={handleClearChat} variant="outline">
+                  <Trash/>
+                </InputGroup.Button>
+                <InputGroup.Button
+                  onclick={isStreaming ? handleStopResponse : handleAgentPrompt}
+                  disabled={!isStreaming && promptInput.length === 0}
+                  variant="outline"
+                >
+                  {#if isStreaming}
+                    <StopCircle/>
+                  {:else}
+                    <Send/>
+                  {/if}
+                </InputGroup.Button>
+              </InputGroup.InputGroupAddon>
+            </InputGroup.Root>
+          </div>
+        </div>
       </div>
     </div>
   {:else}

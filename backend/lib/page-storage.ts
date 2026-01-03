@@ -13,7 +13,7 @@ export interface PageContent {
 /**
  * Save page content to the database
  */
-export async function savePage(url: string, html: string, scripts: string[]): Promise<string> {
+export async function savePage(projectId: string, url: string, html: string, scripts: string[]): Promise<string> {
   const jsContent = scripts.join('\n\n// ===== SCRIPT SEPARATOR =====\n\n');
   
   // Check if page already exists
@@ -36,6 +36,7 @@ export async function savePage(url: string, html: string, scripts: string[]): Pr
     // Insert new page
     const result = await db.insert(pages)
       .values({
+        projectId,
         url,
         html,
         js: jsContent

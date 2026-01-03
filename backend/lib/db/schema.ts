@@ -102,7 +102,7 @@ export const projects = pgTable("projects", {
     onDelete: "cascade"
   }).notNull(),
   cookies: text(),
-  localStorage: text()
+  localStorage: jsonb().$type<any>()
 }).enableRLS();
 
 export const projectMessageTypes = pgEnum("project_message_types", ["system", "user", "assistant", "tool"]);
@@ -138,6 +138,9 @@ export const checkPoints = pgTable("checkpoints", {
 
 export const pages = pgTable("pages", {
   id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }).notNull(),
   url: text().notNull().unique(),
   js: text(),
   html: text()

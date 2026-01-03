@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { authenticated } from "../middleware/auth";
 import {z} from "zod";
 import { db } from "../../lib/db";
-import { projectMessages, projects } from "../../lib/db/schema";
+import { pages, projectMessages, projects } from "../../lib/db/schema";
 import { and, eq } from "drizzle-orm";
 import puppeteer from "puppeteer";
 import { getTitleFromPage } from "../../lib/crawler";
@@ -76,6 +76,22 @@ export default {
         throw new ORPCError("INTERNAL_SERVER_ERROR");
       }
     }),
+  deleteProject: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input, context}) => {
+      try {
+        await db.delete(projects).where(and(
+          eq(projects.id, input.projectId),
+          eq(projects.userId, context.user.id)
+        ));
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
   getProjectMessages: authenticated
     .input(z.object({
       projectId: z.string()
@@ -100,6 +116,23 @@ export default {
     .handler(async ({input}) => {
       try {
         await db.delete(projectMessages).where(eq(projectMessages.projectId, input.projectId));
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
+  getProjectUrls: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input}) => {
+      try {
+        const urls = await db.select()
+          .from(pages)
+          .where(eq(pages.projectId, input.projectId));
+
+        return urls;
       } catch (error) {
         if(error instanceof ORPCError) throw error;
 

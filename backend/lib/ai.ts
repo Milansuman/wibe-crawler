@@ -25,12 +25,12 @@ function truncateResponse(data: any, maxChars: number = MAX_CHARACTERS): string 
   if (jsonString.length <= maxChars) {
     return jsonString;
   }
-  
+
   // If it's an array, try to return fewer items
   if (Array.isArray(data)) {
     const truncatedArray = [];
     let currentLength = 2; // Account for []
-    
+
     for (const item of data) {
       const itemString = JSON.stringify(item);
       if (currentLength + itemString.length + 1 <= maxChars) {
@@ -40,7 +40,7 @@ function truncateResponse(data: any, maxChars: number = MAX_CHARACTERS): string 
         break;
       }
     }
-    
+
     const result = {
       data: truncatedArray,
       truncated: true,
@@ -50,7 +50,7 @@ function truncateResponse(data: any, maxChars: number = MAX_CHARACTERS): string 
     };
     return JSON.stringify(result);
   }
-  
+
   // For objects or strings, truncate directly
   const truncated = jsonString.substring(0, maxChars - 100);
   return JSON.stringify({
@@ -89,225 +89,238 @@ Expert security researcher & penetration tester specializing in web app security
 - No DoS, no damage, no exfiltration of user data.
 - Report responsibly.`
 
-const tools: ToolSet = {
-  findUrls: {
-    description: "Tool to find all URLs/links present in a web page",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the webpage to crawl")
-    }),
-    execute: async ({url}) => {
-      const browser = await puppeteer.launch();
-      try {
-        const urls = await getUrlsFromPage(browser, url);
-        await browser.close();
-        return truncateResponse(urls);
-      } catch (error) {
-        await browser.close();
-        throw error;
-      }
-    }
-  },
-  findSubdomains: {
-    description: "Tool to find all subdomains of a base domain from links in a web page",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the webpage to crawl"),
-      baseDomain: z.string().describe("The base domain to search for subdomains (e.g., 'example.com')")
-    }),
-    execute: async ({url, baseDomain}) => {
-      const browser = await puppeteer.launch();
-      try {
-        const subdomains = await getSubdomainsFromPage(browser, url, baseDomain);
-        await browser.close();
-        return truncateResponse(subdomains);
-      } catch (error) {
-        await browser.close();
-        throw error;
-      }
-    }
-  },
-  findEmails: {
-    description: "Tool to extract all email addresses from a web page's text content",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the webpage to search for emails")
-    }),
-    execute: async ({url}) => {
-      const browser = await puppeteer.launch();
-      try {
-        const emails = await getEmailsFromPage(browser, url);
-        await browser.close();
-        return truncateResponse(emails);
-      } catch (error) {
-        await browser.close();
-        throw error;
-      }
-    }
-  },
-  getCookies: {
-    description: "Tool to retrieve all cookies set by a web page",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the webpage to get cookies from")
-    }),
-    execute: async ({url}) => {
-      const browser = await puppeteer.launch();
-      try {
-        const cookies = await getCookiesFromPage(browser, url);
-        await browser.close();
-        return truncateResponse(cookies);
-      } catch (error) {
-        await browser.close();
-        throw error;
-      }
-    }
-  },
-  getNetworkRequests: {
-    description: "Tool to capture all network requests made by a web page, including APIs, resources, and third-party services",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the webpage to monitor network requests")
-    }),
-    execute: async ({url}) => {
-      const browser = await puppeteer.launch();
-      try {
-        const requests = await getNetworkRequestsFromPage(browser, url);
-        await browser.close();
-        return truncateResponse(requests);
-      } catch (error) {
-        await browser.close();
-        throw error;
-      }
-    }
-  },
-  getPageContent: {
-    description: "Tool to retrieve and save the visible text content and HTML source code of a web page to the database. This crawls the page and stores it for later analysis. Use this first before using other page analysis tools.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the webpage to save")
-    }),
-    execute: async ({url}) => {
-      const browser = await puppeteer.launch();
-      try {
-        const content = await getPageContent(browser, url);
-        await browser.close();
-        
-        if (!content) {
-          return JSON.stringify({ error: "Failed to get page content" });
+export function generateTools(projectId: string, cookies?: string, localStorage?: any): ToolSet {
+  // Parse cookies string into CookieParam array if provided
+  const parsedCookies = cookies ? JSON.parse(cookies) : undefined;
+
+  // Create options object for crawler functions
+  const crawlerOptions = {
+    cookies: parsedCookies,
+    localStorage: localStorage
+  };
+
+  const tools: ToolSet = {
+    findUrls: {
+      description: "Tool to find all URLs/links present in a web page",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the webpage to crawl")
+      }),
+      execute: async ({ url }) => {
+        const browser = await puppeteer.launch();
+        try {
+          const urls = await getUrlsFromPage(browser, url, crawlerOptions);
+          await browser.close();
+          return truncateResponse(urls);
+        } catch (error) {
+          await browser.close();
+          throw error;
         }
-        
-        // Save to database
-        const pageId = await savePage(url, content.html, content.scripts);
-        
-        const result = { 
-          success: true, 
-          pageId,
-          url,
-          message: "Page saved to database. Use other tools to analyze specific parts of the page.",
-          stats: {
-            textLength: content.text.length,
-            htmlLength: content.html.length,
-            scriptCount: content.scripts.length
+      }
+    },
+    findSubdomains: {
+      description: "Tool to find all subdomains of a base domain from links in a web page",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the webpage to crawl"),
+        baseDomain: z.string().describe("The base domain to search for subdomains (e.g., 'example.com')")
+      }),
+      execute: async ({ url, baseDomain }) => {
+        const browser = await puppeteer.launch();
+        try {
+          const subdomains = await getSubdomainsFromPage(browser, url, baseDomain, crawlerOptions);
+          await browser.close();
+          return truncateResponse(subdomains);
+        } catch (error) {
+          await browser.close();
+          throw error;
+        }
+      }
+    },
+    findEmails: {
+      description: "Tool to extract all email addresses from a web page's text content",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the webpage to search for emails")
+      }),
+      execute: async ({ url }) => {
+        const browser = await puppeteer.launch();
+        try {
+          const emails = await getEmailsFromPage(browser, url, crawlerOptions);
+          await browser.close();
+          return truncateResponse(emails);
+        } catch (error) {
+          await browser.close();
+          throw error;
+        }
+      }
+    },
+    getCookies: {
+      description: "Tool to retrieve all cookies set by a web page",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the webpage to get cookies from")
+      }),
+      execute: async ({ url }) => {
+        const browser = await puppeteer.launch();
+        try {
+          const cookies = await getCookiesFromPage(browser, url, crawlerOptions);
+          await browser.close();
+          return truncateResponse(cookies);
+        } catch (error) {
+          await browser.close();
+          throw error;
+        }
+      }
+    },
+    getNetworkRequests: {
+      description: "Tool to capture all network requests made by a web page, including APIs, resources, and third-party services",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the webpage to monitor network requests")
+      }),
+      execute: async ({ url }) => {
+        const browser = await puppeteer.launch();
+        try {
+          const requests = await getNetworkRequestsFromPage(browser, url, crawlerOptions);
+          await browser.close();
+          return truncateResponse(requests);
+        } catch (error) {
+          await browser.close();
+          throw error;
+        }
+      }
+    },
+    getPageContent: {
+      description: "Tool to retrieve and save the visible text content and HTML source code of a web page to the database. This crawls the page and stores it for later analysis. Use this first before using other page analysis tools.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the webpage to save")
+      }),
+      execute: async ({ url }) => {
+        const browser = await puppeteer.launch();
+        try {
+          const content = await getPageContent(browser, url, crawlerOptions);
+          await browser.close();
+
+          if (!content) {
+            return JSON.stringify({ error: "Failed to get page content" });
           }
-        };
 
-        console.log(result);
+          // Save to database with projectId
+          const pageId = await savePage(projectId, url, content.html, content.scripts);
 
-        return JSON.stringify(result);
-      } catch (error) {
-        await browser.close();
-        throw error;
+          const result = {
+            success: true,
+            pageId,
+            url,
+            message: "Page saved to database. Use other tools to analyze specific parts of the page.",
+            stats: {
+              textLength: content.text.length,
+              htmlLength: content.html.length,
+              scriptCount: content.scripts.length
+            }
+          };
+
+          console.log(result);
+
+          return JSON.stringify(result);
+        } catch (error) {
+          await browser.close();
+          throw error;
+        }
       }
-    }
-  },
-  queryPageDOM: {
-    description: "Query saved page content using CSS selectors. Returns matching elements with their tag, text, attributes, and HTML. Use this to find specific elements like forms, buttons, divs, etc.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the saved page"),
-      selector: z.string().describe("CSS selector to query (e.g., 'form', 'input[type=password]', '.admin-panel', '#login-form')")
-    }),
-    execute: async ({url, selector}) => {
-      const results = await queryPageDOM(url, selector);
-      return truncateResponse(results);
-    }
-  },
-  getPageForms: {
-    description: "Get all forms from a saved page, including their action URLs, methods, and input fields. Essential for testing form-based vulnerabilities.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the saved page")
-    }),
-    execute: async ({url}) => {
-      const forms = await getPageForms(url);
-      return truncateResponse(forms);
-    }
-  },
-  getPageInputs: {
-    description: "Get all input fields from a saved page including their types, names, values, and surrounding context. Useful for identifying injection points.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the saved page")
-    }),
-    execute: async ({url}) => {
-      const inputs = await getPageInputs(url);
-      return truncateResponse(inputs);
-    }
-  },
-  getScriptChunk: {
-    description: "Get a specific chunk of JavaScript code from a saved page by line numbers. Use this to examine specific parts of scripts after finding interesting patterns.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the saved page"),
-      startLine: z.number().describe("Starting line number (1-based)"),
-      endLine: z.number().describe("Ending line number (inclusive)")
-    }),
-    execute: async ({url, startLine, endLine}) => {
-      const chunk = await getScriptChunk(url, startLine, endLine);
-      // Limit script chunks to prevent excessive token usage
-      if (chunk.length > MAX_CHARACTERS) {
-        return JSON.stringify({
-          data: chunk.substring(0, MAX_CHARACTERS),
-          truncated: true,
-          originalLength: chunk.length,
-          message: `Script chunk truncated. Original had ${chunk.length} characters. Consider requesting a smaller line range.`
-        });
+    },
+    queryPageDOM: {
+      description: "Query saved page content using CSS selectors. Returns matching elements with their tag, text, attributes, and HTML. Use this to find specific elements like forms, buttons, divs, etc.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the saved page"),
+        selector: z.string().describe("CSS selector to query (e.g., 'form', 'input[type=password]', '.admin-panel', '#login-form')")
+      }),
+      execute: async ({ url, selector }) => {
+        const results = await queryPageDOM(url, selector);
+        return truncateResponse(results);
       }
-      return chunk;
-    }
-  },
-  searchInScripts: {
-    description: "Search for patterns in JavaScript code from a saved page. Returns matching lines with context. Use to find API keys, credentials, endpoints, etc.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the saved page"),
-      pattern: z.string().describe("Search pattern (string or regex pattern)"),
-      isRegex: z.boolean().optional().describe("Whether the pattern is a regex (default: false)")
-    }),
-    execute: async ({url, pattern, isRegex}) => {
-      const results = await searchInScripts(url, pattern, isRegex || false);
-      return truncateResponse(results);
-    }
-  },
-  getPageMetadata: {
-    description: "Get page metadata including title, meta tags, headers (h1-h6), and links. Useful for understanding page structure and finding hidden endpoints.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the saved page")
-    }),
-    execute: async ({url}) => {
-      const metadata = await getPageMetadata(url);
-      return truncateResponse(metadata);
-    }
-  },
-  getScriptStats: {
-    description: "Get statistics about JavaScript on a saved page: total lines, script count, presence of API keys, console logs, localStorage usage, cookie access, and external API calls.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL of the saved page")
-    }),
-    execute: async ({url}) => {
-      const stats = await getScriptStats(url);
-      return truncateResponse(stats);
+    },
+    getPageForms: {
+      description: "Get all forms from a saved page, including their action URLs, methods, and input fields. Essential for testing form-based vulnerabilities.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the saved page")
+      }),
+      execute: async ({ url }) => {
+        const forms = await getPageForms(url);
+        return truncateResponse(forms);
+      }
+    },
+    getPageInputs: {
+      description: "Get all input fields from a saved page including their types, names, values, and surrounding context. Useful for identifying injection points.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the saved page")
+      }),
+      execute: async ({ url }) => {
+        const inputs = await getPageInputs(url);
+        return truncateResponse(inputs);
+      }
+    },
+    getScriptChunk: {
+      description: "Get a specific chunk of JavaScript code from a saved page by line numbers. Use this to examine specific parts of scripts after finding interesting patterns.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the saved page"),
+        startLine: z.number().describe("Starting line number (1-based)"),
+        endLine: z.number().describe("Ending line number (inclusive)")
+      }),
+      execute: async ({ url, startLine, endLine }) => {
+        const chunk = await getScriptChunk(url, startLine, endLine);
+        // Limit script chunks to prevent excessive token usage
+        if (chunk.length > MAX_CHARACTERS) {
+          return JSON.stringify({
+            data: chunk.substring(0, MAX_CHARACTERS),
+            truncated: true,
+            originalLength: chunk.length,
+            message: `Script chunk truncated. Original had ${chunk.length} characters. Consider requesting a smaller line range.`
+          });
+        }
+        return chunk;
+      }
+    },
+    searchInScripts: {
+      description: "Search for patterns in JavaScript code from a saved page. Returns matching lines with context. Use to find API keys, credentials, endpoints, etc.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the saved page"),
+        pattern: z.string().describe("Search pattern (string or regex pattern)"),
+        isRegex: z.boolean().optional().describe("Whether the pattern is a regex (default: false)")
+      }),
+      execute: async ({ url, pattern, isRegex }) => {
+        const results = await searchInScripts(url, pattern, isRegex || false);
+        return truncateResponse(results);
+      }
+    },
+    getPageMetadata: {
+      description: "Get page metadata including title, meta tags, headers (h1-h6), and links. Useful for understanding page structure and finding hidden endpoints.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the saved page")
+      }),
+      execute: async ({ url }) => {
+        const metadata = await getPageMetadata(url);
+        return truncateResponse(metadata);
+      }
+    },
+    getScriptStats: {
+      description: "Get statistics about JavaScript on a saved page: total lines, script count, presence of API keys, console logs, localStorage usage, cookie access, and external API calls.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the saved page")
+      }),
+      execute: async ({ url }) => {
+        const stats = await getScriptStats(url);
+        return truncateResponse(stats);
+      }
     }
   }
+
+  return tools;
 }
 
-export async function* streamAgentResponse(messages: Message[], url: string, projectId: string) {
+export async function* streamAgentResponse(messages: Message[], url: string, projectId: string, cookies?: string, localStorage?: any) {
   // Keep only recent messages to avoid context overflow
   const MAX_MESSAGES = 10;
   const recentMessages = messages.slice(-MAX_MESSAGES);
-  
+
   const { fullStream } = streamText({
-    model: groq("llama-3.3-70b-versatile"),
+    model: groq("moonshotai/kimi-k2-instruct-0905"),
     system: `${mainSystemPrompt} website: ${url}`,
     messages: recentMessages.map((message) => {
       if (message.text) {
@@ -322,7 +335,7 @@ export async function* streamAgentResponse(messages: Message[], url: string, pro
         }
       }
     }) as ModelMessage[],
-    tools,
+    tools: generateTools(projectId, cookies, localStorage),
     stopWhen: stepCountIs(10)
   })
 
