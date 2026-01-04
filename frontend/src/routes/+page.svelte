@@ -7,6 +7,7 @@
   import * as InputGroup from "$lib/components/ui/input-group";
   import type { PageProps } from "./$types";
   import { safeRPC } from "$lib/api-client";
+  import * as Empty from "$lib/components/ui/empty/index.js";
   import { toast } from "svelte-sonner";
   import {
     Send,
@@ -15,10 +16,22 @@
     Loader2,
     Settings,
     Check,
+    User,
+    LogOut,
+    MoreVertical,
+    Pin,
+    Edit,
+    Sun,
+    Moon,
+    Link,
+    ArrowUpRightIcon,
+    Image,
   } from "lucide-svelte";
+  import { toggleMode } from "mode-watcher";
   import SvelteMarkdown from "svelte-markdown";
-  import {Spinner} from "$lib/components/ui/spinner";
+  import { Spinner } from "$lib/components/ui/spinner";
   import * as Tabs from "$lib/components/ui/tabs";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 
   interface Project {
     id: string;
@@ -74,6 +87,7 @@
   let settingsDialogOpen = $state(false);
   let settingsLoading = $state(false);
   let projectUrls = $state<PageUrl[]>([]);
+  let assetsFound = $state<PageUrl[]>([]);
   let selectedUrl = $state<PageUrl | undefined>();
   let urlDetailsDialogOpen = $state(false);
   let urlDetailsTab = $state<"html" | "js">("html");
@@ -258,6 +272,34 @@
     settingsLoading = false;
   };
 
+  const handleLogout = async () => {
+    await authClient.signOut();
+    goto("/login");
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    const { error } = await safeRPC.projects.deleteProject({ projectId });
+    if (error) {
+      toast.error(error.message);
+    } else {
+      projects = projects.filter((p) => p.id !== projectId);
+      if (currentProject?.id === projectId) {
+        currentProject = projects[0];
+      }
+      toast.success("Project deleted");
+    }
+  };
+
+  const handlePinProject = (projectId: string) => {
+    const projectIndex = projects.findIndex((p) => p.id === projectId);
+    if (projectIndex > 0) {
+      const [project] = projects.splice(projectIndex, 1);
+      projects.unshift(project);
+      projects = projects; // Trigger reactivity
+      toast.success("Project pinned to top");
+    }
+  };
+
   // Effects
   $effect(() => {
     if (currentProject) {
@@ -292,6 +334,12 @@
 
 <div class="flex flex-row gap-6 p-6 w-full h-full overflow-hidden">
   <nav class="flex flex-col gap-3 w-56 h-full">
+    <!-- Logo and Title -->
+    <div class="flex items-center gap-3 px-2 py-1">
+      <img src="/images/logo.png" alt="Wibe Crawler Logo" class="w-8 h-8" />
+      <h1 class="text-xl font-bold">Wibe Crawler</h1>
+    </div>
+
     <Dialog.Root
       open={newProjectDialogOpen}
       onOpenChange={(open) => (newProjectDialogOpen = open)}
@@ -299,7 +347,7 @@
       <Dialog.Trigger>
         <Button class="w-full">New Project</Button>
       </Dialog.Trigger>
-      <Dialog.Content class="dark text-foreground">
+      <Dialog.Content class="text-foreground">
         <Dialog.Header>
           <Dialog.Title>Test a new website</Dialog.Title>
           <Dialog.Description
@@ -314,15 +362,106 @@
         </form>
       </Dialog.Content>
     </Dialog.Root>
-    <div class="flex flex-col">
+    <div
+      class="flex flex-col flex-1 overflow-y-auto min-h-0 scrollbar-hide [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+    >
       {#each projects as project}
-        <button
-          class="flex flex-row gap-2 p-2 rounded-lg hover:bg-secondary overflow-hidden text-muted-foreground hover:text-foreground"
-          onclick={() => (currentProject = project)}
+        <div
+          class="group flex flex-row gap-2 p-2 rounded-lg hover:bg-secondary overflow-hidden text-muted-foreground hover:text-foreground flex-shrink-0 items-center"
         >
-          <span class="truncate">{project.title}</span>
-        </button>
+          <button
+            class="flex-1 truncate text-left"
+            onclick={() => (currentProject = project)}
+          >
+            <span class="truncate">{project.title}</span>
+          </button>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+            >
+              <button class="p-1 hover:bg-background rounded transition-colors">
+                <MoreVertical class="w-4 h-4" />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content>
+              <DropdownMenu.Item
+                onclick={() => (
+                  (currentProject = project),
+                  (settingsDialogOpen = true)
+                )}
+              >
+                <Edit class="w-4 h-4 mr-2" />
+                Edit
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onclick={() => handlePinProject(project.id)}>
+                <Pin class="w-4 h-4 mr-2" />
+                Pin to top
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator />
+              <DropdownMenu.Item
+                onclick={() => handleDeleteProject(project.id)}
+                class="text-destructive focus:text-destructive"
+              >
+                <Trash class="w-4 h-4 mr-2" />
+                Delete
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        </div>
       {/each}
+    </div>
+    <!-- User Capsule at the bottom -->
+    <div class="mt-auto pt-3 border-t border-border">
+      <div
+        class="flex items-center justify-between p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
+      >
+        <div class="flex items-center gap-2 min-w-0">
+          <div
+            class="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary flex-shrink-0"
+          >
+            <User class="w-4 h-4" />
+          </div>
+          <span class="text-sm font-medium truncate"
+            >{$session.data?.user?.email || "User"}</span
+          >
+        </div>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger class="flex-shrink-0">
+            <button class="p-1 hover:bg-background rounded transition-colors">
+              <Settings class="w-4 h-4" />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content>
+            <DropdownMenu.Item onclick={toggleMode}>
+              <Sun class="w-4 h-4 mr-2" />
+              Toggle Theme
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator />
+            <DropdownMenu.Item
+              onclick={async () => {
+                if (confirm("Delete all projects?")) {
+                  for (const project of projects) {
+                    await handleDeleteProject(project.id);
+                  }
+                  toast.success("All projects deleted");
+                }
+              }}
+              class="text-destructive focus:text-destructive"
+            >
+              <Trash class="w-4 h-4 mr-2" />
+              Delete All Projects
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator />
+            <DropdownMenu.Item
+              onclick={handleLogout}
+              class="text-destructive focus:text-destructive"
+            >
+              <LogOut class="w-4 h-4 mr-2" />
+              Logout
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      </div>
     </div>
   </nav>
 
@@ -331,7 +470,9 @@
       open={urlDetailsDialogOpen}
       onOpenChange={(open) => (urlDetailsDialogOpen = open)}
     >
-      <Dialog.Content class="dark text-foreground max-w-4xl max-h-[80vh] flex flex-col overflow-hidden">
+      <Dialog.Content
+        class="text-foreground max-w-4xl max-h-[80vh] flex flex-col overflow-hidden"
+      >
         <Dialog.Header class="flex-shrink-0">
           <Dialog.Title>URL Details</Dialog.Title>
           <Dialog.Description class="break-all"
@@ -339,18 +480,25 @@
           >
         </Dialog.Header>
         {#if selectedUrl}
-          <Tabs.Root bind:value={urlDetailsTab} class="flex flex-col overflow-hidden flex-1 min-h-0">
+          <Tabs.Root
+            bind:value={urlDetailsTab}
+            class="flex flex-col overflow-hidden flex-1 min-h-0"
+          >
             <Tabs.List class="w-full flex-shrink-0">
               <Tabs.Trigger value="html" class="flex-1">HTML</Tabs.Trigger>
               <Tabs.Trigger value="js" class="flex-1">JavaScript</Tabs.Trigger>
             </Tabs.List>
             <Tabs.Content value="html" class="overflow-auto flex-1 min-h-0">
-              <pre
-                class="bg-secondary p-4 rounded-md text-xs"><code class="whitespace-pre-wrap break-all">{selectedUrl.html || "No HTML content"}</code></pre>
+              <pre class="bg-secondary p-4 rounded-md text-xs"><code
+                  class="whitespace-pre-wrap break-all"
+                  >{selectedUrl.html || "No HTML content"}</code
+                ></pre>
             </Tabs.Content>
             <Tabs.Content value="js" class="overflow-auto flex-1 min-h-0">
-              <pre
-                class="bg-secondary p-4 rounded-md text-xs"><code class="whitespace-pre-wrap break-all">{selectedUrl.js || "No JavaScript content"}</code></pre>
+              <pre class="bg-secondary p-4 rounded-md text-xs"><code
+                  class="whitespace-pre-wrap break-all"
+                  >{selectedUrl.js || "No JavaScript content"}</code
+                ></pre>
             </Tabs.Content>
           </Tabs.Root>
         {/if}
@@ -360,7 +508,7 @@
       open={settingsDialogOpen}
       onOpenChange={(open) => (settingsDialogOpen = open)}
     >
-      <Dialog.Content class="dark text-foreground">
+      <Dialog.Content class="text-foreground">
         <Dialog.Header>
           <Dialog.Title>Project Settings</Dialog.Title>
           <Dialog.Description>Update project configuration</Dialog.Description>
@@ -430,17 +578,11 @@
           <h1 class="text-md truncate">{currentProject.title.slice(0, 50)}</h1>
           <p class="text-muted-foreground text-sm">{currentProject.url}</p>
         </div>
-        <button
-          class="ml-auto hover:text-muted-foreground transition-colors"
-          onclick={() => (settingsDialogOpen = true)}
-        >
-          <Settings />
-        </button>
       </div>
       <div class="flex flex-row flex-1 overflow-hidden">
         <div class="w-[70%] border-r border-border flex p-4">
           <!--DASHBOARD-->
-          <Tabs.Root>
+          <Tabs.Root class="w-full">
             <Tabs.List>
               <Tabs.Trigger value="stats">Home</Tabs.Trigger>
               <Tabs.Trigger value="urls">URLs</Tabs.Trigger>
@@ -449,44 +591,105 @@
               <Tabs.Trigger value="exploits">Vulnerabilities</Tabs.Trigger>
             </Tabs.List>
             <Tabs.Content value="urls" class="overflow-auto">
-              <div class="flex flex-col gap-2 mt-4">
-                {#if projectUrls.length === 0}
-                  <p class="text-muted-foreground text-sm">
-                    No URLs have been crawled yet. Chat with the agent to start
-                    crawling.
+              <div class="flex flex-col gap-2 mt-4" class:h-[90%]={projectUrls.length === 0} class:items-center={projectUrls.length === 0} class:justify-center={projectUrls.length === 0}>
+              {#if projectUrls.length === 0}
+                <Empty.Root>
+                <Empty.Header>
+                  <Empty.Media variant="icon">
+                  <Link color="#3b82f6"/>
+                  </Empty.Media>
+                  <Empty.Title>No Urls Yet</Empty.Title>
+                  <Empty.Description>
+                  Start crawling your website to see the URLs
+                  </Empty.Description>
+                </Empty.Header>
+                <Empty.Content>
+                  <Button>Start Crawling</Button>
+                </Empty.Content>
+                </Empty.Root>
+              {:else}
+                <div class="space-y-2 overflow-auto">
+                {#each projectUrls as pageUrl}
+                  <button
+                  class="w-full text-left p-3 rounded-lg border border-border hover:bg-secondary transition-colors"
+                  onclick={() => {
+                    selectedUrl = pageUrl;
+                    urlDetailsDialogOpen = true;
+                    urlDetailsTab = "html";
+                  }}
+                  >
+                  <p class="text-sm font-medium truncate">
+                    {pageUrl.url}
                   </p>
-                {:else}
-                  <div class="space-y-2 overflow-auto">
-                    {#each projectUrls as pageUrl}
-                      <button
-                        class="w-full text-left p-3 rounded-lg border border-border hover:bg-secondary transition-colors"
-                        onclick={() => {
-                          selectedUrl = pageUrl;
-                          urlDetailsDialogOpen = true;
-                          urlDetailsTab = "html";
-                        }}
-                      >
-                        <p class="text-sm font-medium truncate">
-                          {pageUrl.url}
-                        </p>
-                        <div class="flex gap-2 mt-1">
-                          {#if pageUrl.html}
-                            <span
-                              class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
-                              >HTML</span
-                            >
-                          {/if}
-                          {#if pageUrl.js}
-                            <span
-                              class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
-                              >JS</span
-                            >
-                          {/if}
-                        </div>
-                      </button>
-                    {/each}
+                  <div class="flex gap-2 mt-1">
+                    {#if pageUrl.html}
+                    <span
+                      class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
+                      >HTML</span
+                    >
+                    {/if}
+                    {#if pageUrl.js}
+                    <span
+                      class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
+                      >JS</span
+                    >
+                    {/if}
                   </div>
-                {/if}
+                  </button>
+                {/each}
+                </div>
+              {/if}
+              </div>
+            </Tabs.Content>
+            <Tabs.Content value="assets" class="overflow-auto">
+              <div class="flex flex-col gap-2 mt-4" class:h-[90%]={assetsFound.length === 0} class:items-center={assetsFound.length === 0} class:justify-center={assetsFound.length === 0}>
+              {#if assetsFound.length === 0}
+                <Empty.Root>
+                <Empty.Header>
+                  <Empty.Media variant="icon">
+                  <Image color="#3b82f6"/>
+                  </Empty.Media>
+                  <Empty.Title>No Assets Found Yet</Empty.Title>
+                  <Empty.Description>
+                  Start crawling your website to see the assets
+                  </Empty.Description>
+                </Empty.Header>
+                <Empty.Content>
+                  <Button>Start Crawling</Button>
+                </Empty.Content>
+                </Empty.Root>
+              {:else}
+                <div class="space-y-2 overflow-auto">
+                {#each projectUrls as pageUrl}
+                  <button
+                  class="w-full text-left p-3 rounded-lg border border-border hover:bg-secondary transition-colors"
+                  onclick={() => {
+                    selectedUrl = pageUrl;
+                    urlDetailsDialogOpen = true;
+                    urlDetailsTab = "html";
+                  }}
+                  >
+                  <p class="text-sm font-medium truncate">
+                    {pageUrl.url}
+                  </p>
+                  <div class="flex gap-2 mt-1">
+                    {#if pageUrl.html}
+                    <span
+                      class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
+                      >HTML</span
+                    >
+                    {/if}
+                    {#if pageUrl.js}
+                    <span
+                      class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
+                      >JS</span
+                    >
+                    {/if}
+                  </div>
+                  </button>
+                {/each}
+                </div>
+              {/if}
               </div>
             </Tabs.Content>
           </Tabs.Root>
@@ -513,7 +716,7 @@
               {:else if streamMessage.role === "tool"}
                 <div class="flex flex-row items-center gap-2">
                   {#if isStreaming && currentType === "tool"}
-                    <Spinner/>
+                    <Spinner />
                   {:else}
                     <Check />
                   {/if}
@@ -535,9 +738,12 @@
                   }
                 }}
               />
-              <InputGroup.InputGroupAddon align="block-end" class="flex flex-row justify-end">
+              <InputGroup.InputGroupAddon
+                align="block-end"
+                class="flex flex-row justify-end"
+              >
                 <InputGroup.Button onclick={handleClearChat} variant="outline">
-                  <Trash/>
+                  <Trash />
                 </InputGroup.Button>
                 <InputGroup.Button
                   onclick={isStreaming ? handleStopResponse : handleAgentPrompt}
@@ -545,9 +751,9 @@
                   variant="outline"
                 >
                   {#if isStreaming}
-                    <StopCircle/>
+                    <StopCircle />
                   {:else}
-                    <Send/>
+                    <Send />
                   {/if}
                 </InputGroup.Button>
               </InputGroup.InputGroupAddon>
