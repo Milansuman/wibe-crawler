@@ -539,6 +539,79 @@ export function generateTools(projectId: string, cookies?: string, localStorage?
         }
       }
     },
+    xsstrike: {
+      description: "Test for Cross-Site Scripting (XSS) vulnerabilities using XSSStrike. Automatically crawls and tests for reflected, stored, and DOM-based XSS. Can test specific payloads or use built-in payload database. Essential for identifying XSS attack vectors.",
+      inputSchema: z.object({
+        url: z.string().url().describe("Target URL to scan for XSS vulnerabilities"),
+        crawl: z.number().optional().describe("Crawl depth level (0-5). Higher = more pages tested. Default: 2"),
+        threads: z.number().optional().describe("Number of threads for concurrent testing. Default: 10"),
+        timeout: z.number().optional().describe("Request timeout in seconds. Default: 10"),
+        vector: z.string().optional().describe("Specific XSS payload vector to test (e.g., '<script>alert(1)</script>')")
+      }),
+      execute: async ({ url, crawl, threads, timeout, vector }) => {
+        try {
+          const response = await fetch('http://localhost:8000/scan/xsstrike', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              url,
+              crawl: crawl || 2,
+              threads: threads || 10,
+              timeout: timeout || 10,
+              vector
+            })
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            return JSON.stringify({ error: error.detail || 'XSSStrike scan failed' });
+          }
+
+          const result = await response.json();
+          console.log(result);
+          return truncateResponse(result);
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to connect to tools API: ${error}` });
+        }
+      }
+    },
+    wpscan: {
+      description: "Scan WordPress sites for vulnerabilities, outdated plugins/themes, user enumeration, and security misconfigurations using WPScan. Provides detailed vulnerability information with CVE references when API token is provided. Essential for WordPress security assessments.",
+      inputSchema: z.object({
+        url: z.string().url().describe("Target WordPress URL to scan"),
+        aggressive: z.boolean().optional().describe("Run in aggressive mode for more thorough testing. Default: false"),
+        enumerate: z.string().optional().describe("What to enumerate: vp (vulnerable plugins), vt (vulnerable themes), u (users), m (media). Default: 'vp,vt,u,m'"),
+        apiToken: z.string().optional().describe("WPScan API token for vulnerability database access. Get from wpscan.com")
+      }),
+      execute: async ({ url, aggressive, enumerate, apiToken }) => {
+        try {
+          const response = await fetch('http://localhost:8000/scan/wpscan', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              url,
+              aggressive: aggressive || false,
+              enumerate: enumerate || 'vp,vt,u,m',
+              api_token: apiToken
+            })
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            return JSON.stringify({ error: error.detail || 'WPScan failed' });
+          }
+
+          const result = await response.json();
+          return truncateResponse(result);
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to connect to tools API: ${error}` });
+        }
+      }
+    },
     saveVulnerability: {
       description: "Save a discovered vulnerability to the database. Use this tool when you have confirmed a security vulnerability through testing. Include detailed evidence, reproduction steps, and impact assessment.",
       inputSchema: z.object({
