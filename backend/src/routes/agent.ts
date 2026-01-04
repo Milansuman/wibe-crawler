@@ -3,7 +3,7 @@ import { db } from "../../lib/db";
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { projectMessages, projects } from "../../lib/db/schema";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { streamAgentResponse } from "../../lib/ai";
 
 async function saveProjectMessage(projectId: string, role: "user" | "assistant" | "tool", text: string) {
@@ -29,7 +29,8 @@ export default {
 
         const messageList = await db.select()
           .from(projectMessages)
-          .where(eq(projectMessages.projectId, input.projectId));
+          .where(eq(projectMessages.projectId, input.projectId))
+          .orderBy(asc(projectMessages.createdAt));
 
         const formattedMessageList = messageList
           .filter(message => message.role !== "tool")
@@ -47,7 +48,7 @@ export default {
 
         await saveProjectMessage(input.projectId, "user", input.prompt);
 
-        const agentStream = streamAgentResponse(formattedMessageList, project.url, input.projectId);
+        const agentStream = streamAgentResponse(formattedMessageList, project.url, input.projectId, project.cookies ?? undefined);
 
         let currentResponseType;
         let responseBuffer = "";

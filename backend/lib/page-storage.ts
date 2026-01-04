@@ -15,7 +15,7 @@ export interface PageContent {
  */
 export async function savePage(projectId: string, url: string, html: string, scripts: string[]): Promise<string> {
   const jsContent = scripts.join('\n\n// ===== SCRIPT SEPARATOR =====\n\n');
-  
+  console.log(`Saving page: ${url}`);
   // Check if page already exists
   const [existing] = await db.select()
     .from(pages)

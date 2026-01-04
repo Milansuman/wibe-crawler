@@ -6,6 +6,8 @@ import { z } from "zod";
 import puppeteer from 'puppeteer';
 import { getUrlsFromPage, getSubdomainsFromPage, getEmailsFromPage, getCookiesFromPage, getNetworkRequestsFromPage, getPageContent } from './crawler';
 import { savePage, queryPageDOM, getPageForms, getPageInputs, getScriptChunk, searchInScripts, getPageMetadata, getScriptStats } from './page-storage';
+import { db } from './db';
+import { vulnerabilities } from './db/schema';
 
 interface Message {
   role: "system" | "user" | "tool" | "assistant"
@@ -76,7 +78,14 @@ Expert security researcher & penetration tester specializing in web app security
    - **Auth & Access Control** (weak auth, IDOR, session issues)  
    - **Configuration** (security headers, cookie flags, exposed keys)  
    - **Business Logic** (rate limits, race conditions, validation flaws)
-6. **Report** – For each finding: Vulnerability Type, Location, Severity, Evidence, Recommended Fix.
+6. **Report** – For each finding, save the vulnerability using the \`saveVulnerability\` tool. also report the findings in detail to the user.
+
+## Communication Rules
+- **Always describe findings**: After using any tool, explicitly state what you found, including specific data, patterns, or evidence.
+- **Always describe next steps**: Before using tools, explain exactly what you're going to do and why.
+- **Never speculate**: Only report concrete findings based on tool results. Avoid "might be", "could be", "possibly" unless backed by evidence.
+- **Always provide payloads**: When identifying vulnerabilities, always include specific test payloads, exploit examples, or proof-of-concept code.
+- **Be explicit**: State exact URLs, parameters, line numbers, code snippets, and technical details.
 
 ## Key Guidelines
 - Always save page with \`getPageContent\` before deep analysis.
@@ -84,14 +93,35 @@ Expert security researcher & penetration tester specializing in web app security
 - Prioritize by risk: authentication > injection > information disclosure.
 - Verify findings; avoid disruption.
 - Test only with explicit permission.
+- Save the vulnerability as soon as you find it.
 
 ## Ethical Rules
 - No DoS, no damage, no exfiltration of user data.
 - Report responsibly.`
 
+/**
+ * Parse Cookie header format into puppeteer CookieParam array
+ * @param cookieHeader Cookie header value (e.g., "session=abc; token=xyz")
+ * @returns Array of cookie objects for puppeteer
+ */
+function parseCookieHeader(cookieHeader: string): Array<{ name: string; value: string; domain?: string; path?: string }> {
+  return cookieHeader
+    .split(';')
+    .map(cookie => cookie.trim())
+    .filter(cookie => cookie.length > 0)
+    .map(cookie => {
+      const [name, ...valueParts] = cookie.split('=');
+      return {
+        name: name.trim(),
+        value: valueParts.join('=').trim(), // Join back in case value contains '='
+        path: '/'
+      };
+    });
+}
+
 export function generateTools(projectId: string, cookies?: string, localStorage?: any): ToolSet {
-  // Parse cookies string into CookieParam array if provided
-  const parsedCookies = cookies ? JSON.parse(cookies) : undefined;
+  // Parse cookies string from Cookie header format if provided
+  const parsedCookies = cookies ? parseCookieHeader(cookies) : undefined;
 
   // Create options object for crawler functions
   const crawlerOptions = {
@@ -215,8 +245,6 @@ export function generateTools(projectId: string, cookies?: string, localStorage?
               scriptCount: content.scripts.length
             }
           };
-
-          console.log(result);
 
           return JSON.stringify(result);
         } catch (error) {
@@ -511,7 +539,36 @@ export function generateTools(projectId: string, cookies?: string, localStorage?
         }
       }
     },
-    
+    saveVulnerability: {
+      description: "Save a discovered vulnerability to the database. Use this tool when you have confirmed a security vulnerability through testing. Include detailed evidence, reproduction steps, and impact assessment.",
+      inputSchema: z.object({
+        title: z.string().describe("Short descriptive title of the vulnerability (e.g., 'SQL Injection in login form', 'XSS in search parameter')"),
+        description: z.string().describe("Detailed description including: 1) What the vulnerability is, 2) Where it was found (URL, parameter, endpoint), 3) How to reproduce it (step by step), 4) Evidence/proof (payloads used, responses received), 5) Potential impact, 6) Recommended fix"),
+        cvss: z.number().min(0).max(10).describe("CVSS score from 0-10. 0-3.9: Low, 4-6.9: Medium, 7-8.9: High, 9-10: Critical")
+      }),
+      execute: async ({ title, description, cvss }) => {
+        try {
+          const [vulnerability] = await db.insert(vulnerabilities).values({
+            projectId,
+            title,
+            description,
+            cvss: Math.round(cvss)
+          }).returning();
+
+          return JSON.stringify({
+            success: true,
+            message: `Vulnerability saved successfully with ID: ${vulnerability.id}`,
+            vulnerability: {
+              id: vulnerability.id,
+              title: vulnerability.title,
+              cvss: vulnerability.cvss
+            }
+          });
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to save vulnerability: ${error}` });
+        }
+      }
+    }
   }
 
   return tools;
@@ -539,7 +596,7 @@ export async function* streamAgentResponse(messages: Message[], url: string, pro
       }
     }) as ModelMessage[],
     tools: generateTools(projectId, cookies, localStorage),
-    stopWhen: stepCountIs(10)
+    stopWhen: stepCountIs(20)
   })
 
   for await (const chunk of fullStream) {

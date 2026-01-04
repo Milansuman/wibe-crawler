@@ -114,7 +114,8 @@ export const projectMessages = pgTable("project_messages", {
   }).notNull(),
   role: projectMessageTypes().default("user"),
   text: text(),
-  content: jsonb().$type<Array<TextPart | ReasoningPart>>()
+  content: jsonb().$type<Array<TextPart | ReasoningPart>>(),
+  createdAt: timestamp().defaultNow()
 }).enableRLS();
 
 export const vulnerabilities = pgTable("vulnerabilities", {
@@ -143,5 +144,6 @@ export const pages = pgTable("pages", {
   }).notNull(),
   url: text().notNull().unique(),
   js: text(),
-  html: text()
+  html: text(),
+  cookies: text()
 }).enableRLS();

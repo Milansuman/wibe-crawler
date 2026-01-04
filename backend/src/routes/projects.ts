@@ -2,8 +2,8 @@ import { ORPCError } from "@orpc/server";
 import { authenticated } from "../middleware/auth";
 import {z} from "zod";
 import { db } from "../../lib/db";
-import { pages, projectMessages, projects } from "../../lib/db/schema";
-import { and, eq } from "drizzle-orm";
+import { pages, projectMessages, projects, vulnerabilities } from "../../lib/db/schema";
+import { and, asc, desc, eq } from "drizzle-orm";
 import puppeteer from "puppeteer";
 import { getTitleFromPage } from "../../lib/crawler";
 
@@ -100,7 +100,8 @@ export default {
       try {
         const messages = await db.select()
           .from(projectMessages)
-          .where(eq(projectMessages.projectId, input.projectId));
+          .where(eq(projectMessages.projectId, input.projectId))
+          .orderBy(asc(projectMessages.createdAt));
 
         return messages;
       } catch (error) {
@@ -133,6 +134,24 @@ export default {
           .where(eq(pages.projectId, input.projectId));
 
         return urls;
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
+  getProjectVulnerabilities: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input}) => {
+      try {
+        const vulns = await db.select()
+          .from(vulnerabilities)
+          .where(eq(vulnerabilities.projectId, input.projectId))
+          .orderBy(desc(vulnerabilities.cvss));
+
+        return vulns;
       } catch (error) {
         if(error instanceof ORPCError) throw error;
 

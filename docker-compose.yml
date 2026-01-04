@@ -42,8 +42,7 @@ services:
       context: ./tools-api
       dockerfile: Dockerfile
     container_name: security-tools-api
-    ports:
-      - "8000:8000"
+    network_mode: "host"
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
