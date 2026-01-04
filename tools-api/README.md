@@ -1,6 +1,6 @@
 # Security Tools API
 
-A FastAPI-based REST API that provides structured JSON output from popular security scanning tools including Nmap, SQLmap, Nikto, and WhatWeb.
+A FastAPI-based REST API that provides structured JSON output from popular security scanning tools including Nmap, SQLmap, Nikto, WhatWeb, and XSSStrike.
 
 ## Features
 
@@ -8,6 +8,7 @@ A FastAPI-based REST API that provides structured JSON output from popular secur
 - 💉 **SQLmap**: SQL injection detection and exploitation
 - 🕷️ **Nikto**: Web server vulnerability scanning
 - 🌐 **WhatWeb**: Web technology identification
+- ✅ **XSSStrike**: XSS vulnerability detection and exploitation
 - 📊 **Structured JSON Output**: All tools return parsed, structured JSON responses
 - 🐳 **Dockerized**: Fully containerized with all dependencies
 
@@ -41,6 +42,7 @@ python main.py
 **Note**: For local development, you need to install the security tools manually:
 - `apt-get install nmap nikto whatweb` (Debian/Ubuntu)
 - Install SQLmap from: https://github.com/sqlmapproject/sqlmap
+- Install XSSStrike from: https://github.com/s0md3v/XSSStrike
 
 ## API Endpoints
 
@@ -216,6 +218,48 @@ POST /scan/whatweb
 }
 ```
 
+### XSSStrike Scan
+
+```bash
+POST /scan/xsstrike
+```
+
+**Request Body:**
+```json
+{
+  "url": "https://example.com/search?q=test",
+  "crawl": 2,
+  "threads": 10,
+  "timeout": 10
+}
+```
+
+**Parameters:**
+- `url` (required): Target URL to scan for XSS vulnerabilities
+- `crawl` (optional): Crawl depth level (0-5), default: 2
+- `threads` (optional): Number of threads to use, default: 10
+- `timeout` (optional): Timeout for requests in seconds, default: 10
+- `vector` (optional): Specific XSS payload vector to test
+
+**Response:**
+```json
+{
+  "vulnerable": true,
+  "vulnerabilities": [
+    "https://example.com/search?q=<img src=x onerror=alert(1)>"
+  ],
+  "payloads": [
+    "<img src=x onerror=alert(1)>",
+    "<svg onload=alert(1)>"
+  ],
+  "endpoints": [
+    "/search?q=",
+    "/api/search"
+  ],
+  "raw_output": "..."
+}
+```
+
 ## API Documentation
 
 Once the server is running, visit:
@@ -249,6 +293,11 @@ curl -X POST http://localhost:8000/scan/nikto \
 curl -X POST http://localhost:8000/scan/whatweb \
   -H "Content-Type: application/json" \
   -d '{"target": "https://example.com"}'
+
+# XSSStrike scan
+curl -X POST http://localhost:8000/scan/xsstrike \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/search?q=test", "crawl": 2}'
 ```
 
 ### Using Python
@@ -301,6 +350,7 @@ nmap --version
 sqlmap --version
 nikto -Version
 whatweb --version
+xsstrike --version
 ```
 
 ## License

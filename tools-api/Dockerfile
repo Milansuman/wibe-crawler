@@ -33,6 +33,13 @@ RUN git clone --depth 1 https://github.com/urbanadventurer/WhatWeb.git /opt/what
     && ln -s /opt/whatweb/whatweb /usr/local/bin/whatweb \
     && chmod +x /usr/local/bin/whatweb
 
+# Install XSSStrike from local if available, otherwise from git with retry
+RUN if [ -d "/opt/xsstrike" ]; then \
+    ln -s /opt/xsstrike/xsstrike.py /usr/local/bin/xsstrike; \
+    else \
+    git clone https://github.com/s0md3v/XSSStrike.git /opt/xsstrike || echo "XSSStrike clone failed, will run in degraded mode"; \
+    fi || true
+
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

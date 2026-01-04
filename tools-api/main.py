@@ -51,6 +51,13 @@ class DigRequest(BaseModel):
     nameserver: Optional[str] = Field(None, description="Specific nameserver to query (@server)")
     short: Optional[bool] = Field(False, description="Short output format")
 
+class XSSStrikeScanRequest(BaseModel):
+    url: str = Field(..., description="Target URL to scan for XSS vulnerabilities")
+    crawl: Optional[int] = Field(2, description="Crawl depth level (0-5)")
+    threads: Optional[int] = Field(10, description="Number of threads to use")
+    timeout: Optional[int] = Field(10, description="Timeout for requests (seconds)")
+    vector: Optional[str] = Field(None, description="Specific XSS payload vector to test")
+
 
 def run_command(command: List[str], timeout: int = 300) -> Dict[str, Any]:
     """Execute a command and return structured output"""
@@ -195,6 +202,37 @@ def parse_nslookup_output(output: str) -> Dict[str, Any]:
     return parsed
 
 
+def parse_xsstrike_output(output: str) -> Dict[str, Any]:
+    """Parse XSSStrike output into structured JSON"""
+    parsed = {
+        "vulnerable": False,
+        "vulnerabilities": [],
+        "payloads": [],
+        "endpoints": []
+    }
+    
+    # Extract vulnerabilities
+    vuln_pattern = r"(?:Found|Detected) XSS at: (.+?)(?:\n|$)"
+    vulns = re.findall(vuln_pattern, output, re.IGNORECASE)
+    parsed["vulnerabilities"] = list(set(vulns))
+    
+    # Extract payloads used
+    payload_pattern = r"(?:Payload|Tested)(?::|\\s+with)\\s+([^\n]+)"
+    payloads = re.findall(payload_pattern, output, re.IGNORECASE)
+    parsed["payloads"] = list(set(payloads))[:10]
+    
+    # Extract endpoints scanned
+    endpoint_pattern = r"(?:Testing|Scanning).*?(?:endpoint|url|parameter).*?:\\s*([^\n]+)"
+    endpoints = re.findall(endpoint_pattern, output, re.IGNORECASE)
+    parsed["endpoints"] = list(set(endpoints))[:20]
+    
+    # Check if any vulnerabilities were found
+    if "vulnerable" in output.lower() or len(parsed["vulnerabilities"]) > 0:
+        parsed["vulnerable"] = True
+    
+    return parsed
+
+
 def parse_dig_output(output: str) -> Dict[str, Any]:
     """Parse dig output into structured JSON"""
     parsed = {
@@ -257,6 +295,7 @@ def read_root():
             "whatweb": "/scan/whatweb",
             "nslookup": "/scan/nslookup",
             "dig": "/scan/dig",
+            "xsstrike": "/scan/xsstrike",
             "health": "/health"
         }
     }
@@ -271,7 +310,8 @@ def health_check():
         "nikto": False,
         "whatweb": False,
         "nslookup": False,
-        "dig": False
+        "dig": False,
+        "xsstrike": False
     }
     
     for tool in tools.keys():
@@ -468,6 +508,39 @@ def dig_scan(request: DigRequest):
         parsed = parse_dig_output(result["stdout"])
         parsed["raw_output"] = result["stdout"]
         return parsed
+
+
+@app.post("/scan/xsstrike")
+def xsstrike_scan(request: XSSStrikeScanRequest):
+    """Run XSSStrike scan and return structured results"""
+    command = ["python3", "/opt/xsstrike/xsstrike.py", "-u", request.url]
+    
+    # Add crawl depth
+    command.extend(["--crawl", str(request.crawl)])
+    
+    # Add threads
+    command.extend(["--threads", str(request.threads)])
+    
+    # Add timeout
+    command.extend(["--timeout", str(request.timeout)])
+    
+    # Add specific vector if provided
+    if request.vector:
+        command.extend(["--vector", request.vector])
+    
+    # Add quiet mode for better output parsing
+    command.append("-q")
+    
+    # Execute command
+    result = run_command(command, timeout=600)
+    
+    # Parse and return structured output
+    parsed = parse_xsstrike_output(result["stdout"] + result["stderr"])
+    parsed["raw_output"] = result["stdout"]
+    if result["stderr"]:
+        parsed["raw_stderr"] = result["stderr"]
+    
+    return parsed
 
 
 if __name__ == "__main__":
