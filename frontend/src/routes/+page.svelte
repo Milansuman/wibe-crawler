@@ -23,7 +23,7 @@
     Edit,
     Sun,
     Moon,
-    Link,
+    LinkIcon,
     ArrowUpRightIcon,
     Image,
   } from "lucide-svelte";
@@ -31,6 +31,17 @@
   import SvelteMarkdown from "svelte-markdown";
   import { Spinner } from "$lib/components/ui/spinner";
   import * as Tabs from "$lib/components/ui/tabs";
+  import Code from "$lib/components/renderers/code.svelte";
+  import Heading from "$lib/components/renderers/heading.svelte";
+  import List from "$lib/components/renderers/list.svelte";
+  import ListItem from "$lib/components/renderers/list-item.svelte";
+  import Link from "$lib/components/renderers/link.svelte";
+  import Paragraph from "$lib/components/renderers/paragraph.svelte";
+  import Blockquote from "$lib/components/renderers/blockquote.svelte";
+  import Hr from "$lib/components/renderers/hr.svelte";
+  import Em from "$lib/components/renderers/em.svelte";
+  import Strong from "$lib/components/renderers/strong.svelte";
+  import Codespan from "$lib/components/renderers/codespan.svelte";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 
   interface Project {
@@ -59,6 +70,14 @@
     url: string;
     js: string | null;
     html: string | null;
+  }
+
+  interface Vulnerability {
+    id: string;
+    projectId: string;
+    title: string;
+    description: string | null;
+    cvss: number | null;
   }
 
   const { data: initialPageData }: PageProps = $props();
@@ -91,6 +110,9 @@
   let selectedUrl = $state<PageUrl | undefined>();
   let urlDetailsDialogOpen = $state(false);
   let urlDetailsTab = $state<"html" | "js">("html");
+  let projectVulnerabilities = $state<Vulnerability[]>([]);
+  let selectedVulnerability = $state<Vulnerability | undefined>();
+  let vulnerabilityDetailsDialogOpen = $state(false);
 
   // Handlers
   const handleNewProject = async (event: SubmitEvent) => {
@@ -165,16 +187,6 @@
               text: currentBuffer,
             });
 
-            // Also push to project messages if it's text
-            if (currentType === "text") {
-              projectMessages.push({
-                id: "deadbeef",
-                projectId: currentProject.id,
-                role: "assistant",
-                text: currentBuffer,
-              });
-            }
-
             currentBuffer = "";
           }
 
@@ -195,17 +207,16 @@
             text: currentBuffer,
           });
 
-          // Also push to project messages if it's text
-          if (currentType === "text") {
-            projectMessages.push({
-              id: "deadbeef",
-              projectId: currentProject.id,
-              role: "assistant",
-              text: currentBuffer,
-            });
-          }
-
           currentBuffer = "";
+        }
+        
+        // After streaming completes, reload messages from backend
+        const { data, error: projectError } = await safeRPC.projects.getProjectMessages({
+          projectId: currentProject.id,
+        });
+        
+        if (!projectError) {
+          projectMessages = data;
         }
       } catch (error: any) {
         if (error.name === "AbortError") {
@@ -327,6 +338,19 @@
         }
 
         projectUrls = data;
+      })();
+
+      (async () => {
+        const { data, error } = await safeRPC.projects.getProjectVulnerabilities({
+          projectId: currentProject.id,
+        });
+
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+
+        projectVulnerabilities = data;
       })();
     }
   });
@@ -505,6 +529,50 @@
       </Dialog.Content>
     </Dialog.Root>
     <Dialog.Root
+      open={vulnerabilityDetailsDialogOpen}
+      onOpenChange={(open) => (vulnerabilityDetailsDialogOpen = open)}
+    >
+      <Dialog.Content class="dark text-foreground max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+        <Dialog.Header class="flex-shrink-0">
+          <Dialog.Title class="flex items-center gap-2">
+            {selectedVulnerability?.title}
+            {#if selectedVulnerability?.cvss !== null && selectedVulnerability?.cvss !== undefined}
+              <span
+                class="text-xs px-2 py-0.5 rounded font-medium {selectedVulnerability.cvss >= 9 ? 'bg-red-500/20 text-red-400' : selectedVulnerability.cvss >= 7 ? 'bg-orange-500/20 text-orange-400' : selectedVulnerability.cvss >= 4 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}"
+              >
+                CVSS {selectedVulnerability.cvss}
+              </span>
+            {/if}
+          </Dialog.Title>
+          <Dialog.Description>
+            {#if selectedVulnerability?.cvss !== null && selectedVulnerability?.cvss !== undefined}
+              Severity: {selectedVulnerability.cvss >= 9 ? 'Critical' : selectedVulnerability.cvss >= 7 ? 'High' : selectedVulnerability.cvss >= 4 ? 'Medium' : 'Low'}
+            {/if}
+          </Dialog.Description>
+        </Dialog.Header>
+        {#if selectedVulnerability}
+          <div class="overflow-auto flex-1 min-h-0 mt-4">
+            <div class="prose prose-sm prose-invert max-w-none">
+              <SvelteMarkdown 
+                source={selectedVulnerability.description || "No description available"} 
+                renderers={{
+                  code: Code,
+                  heading: Heading,
+                  link: Link,
+                  paragraph: Paragraph,
+                  blockquote: Blockquote,
+                  hr: Hr,
+                  em: Em,
+                  strong: Strong,
+                  codespan: Codespan,
+                }}
+              />
+            </div>
+          </div>
+        {/if}
+      </Dialog.Content>
+    </Dialog.Root>
+    <Dialog.Root
       open={settingsDialogOpen}
       onOpenChange={(open) => (settingsDialogOpen = open)}
     >
@@ -596,7 +664,7 @@
                 <Empty.Root>
                 <Empty.Header>
                   <Empty.Media variant="icon">
-                  <Link color="#3b82f6"/>
+                  <LinkIcon color="#3b82f6"/>
                   </Empty.Media>
                   <Empty.Title>No Urls Yet</Empty.Title>
                   <Empty.Description>
@@ -692,14 +760,103 @@
               {/if}
               </div>
             </Tabs.Content>
+            <Tabs.Content value="exploits" class="overflow-auto">
+              <div class="flex flex-col gap-2 mt-4">
+                {#if projectVulnerabilities.length === 0}
+                  <p class="text-muted-foreground text-sm">
+                    No vulnerabilities found yet. Chat with the agent to discover security issues.
+                  </p>
+                {:else}
+                  <div class="space-y-2 overflow-auto">
+                    {#each projectVulnerabilities as vuln}
+                      <button
+                        class="w-full text-left p-3 rounded-lg border border-border hover:bg-secondary transition-colors"
+                        onclick={() => {
+                          selectedVulnerability = vuln;
+                          vulnerabilityDetailsDialogOpen = true;
+                        }}
+                      >
+                        <div class="flex items-center justify-between">
+                          <p class="text-sm font-medium truncate flex-1 mr-2">
+                            {vuln.title}
+                          </p>
+                          <span
+                            class="text-xs px-2 py-0.5 rounded font-medium {vuln.cvss !== null && vuln.cvss >= 9 ? 'bg-red-500/20 text-red-400' : vuln.cvss !== null && vuln.cvss >= 7 ? 'bg-orange-500/20 text-orange-400' : vuln.cvss !== null && vuln.cvss >= 4 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}"
+                          >
+                            {vuln.cvss !== null ? `CVSS ${vuln.cvss}` : 'N/A'}
+                          </span>
+                        </div>
+                        {#if vuln.description}
+                          <p class="text-xs text-muted-foreground mt-1 line-clamp-2">
+                            {vuln.description.slice(0, 100)}{vuln.description.length > 100 ? '...' : ''}
+                          </p>
+                        {/if}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            </Tabs.Content>
+            <Tabs.Content value="exploits" class="overflow-auto">
+              <div class="flex flex-col gap-2 mt-4">
+                {#if projectVulnerabilities.length === 0}
+                  <p class="text-muted-foreground text-sm">
+                    No vulnerabilities found yet. Chat with the agent to discover security issues.
+                  </p>
+                {:else}
+                  <div class="space-y-2 overflow-auto">
+                    {#each projectVulnerabilities as vuln}
+                      <button
+                        class="w-full text-left p-3 rounded-lg border border-border hover:bg-secondary transition-colors"
+                        onclick={() => {
+                          selectedVulnerability = vuln;
+                          vulnerabilityDetailsDialogOpen = true;
+                        }}
+                      >
+                        <div class="flex items-center justify-between">
+                          <p class="text-sm font-medium truncate flex-1 mr-2">
+                            {vuln.title}
+                          </p>
+                          <span
+                            class="text-xs px-2 py-0.5 rounded font-medium {vuln.cvss !== null && vuln.cvss >= 9 ? 'bg-red-500/20 text-red-400' : vuln.cvss !== null && vuln.cvss >= 7 ? 'bg-orange-500/20 text-orange-400' : vuln.cvss !== null && vuln.cvss >= 4 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}"
+                          >
+                            {vuln.cvss !== null ? `CVSS ${vuln.cvss}` : 'N/A'}
+                          </span>
+                        </div>
+                        {#if vuln.description}
+                          <p class="text-xs text-muted-foreground mt-1 line-clamp-2">
+                            {vuln.description.slice(0, 100)}{vuln.description.length > 100 ? '...' : ''}
+                          </p>
+                        {/if}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            </Tabs.Content>
           </Tabs.Root>
         </div>
-        <div class="flex flex-col w-[30%] p-4 gap-2">
+        <div class="flex flex-col w-[30%] p-4 gap-2 overflow-hidden">
           <!--CHAT AREA-->
-          <div class="flex flex-col gap-2 overflow-y-auto text-sm">
+          <div class="flex flex-col gap-2 overflow-y-auto text-sm w-full overflow-x-hidden">
             {#each projectMessages as projectMessage}
               {#if projectMessage.role === "assistant"}
-                <SvelteMarkdown source={projectMessage.text} />
+                <SvelteMarkdown 
+                  source={projectMessage.text} 
+                  renderers={{
+                    code: Code,
+                    heading: Heading,
+                    // list: List,
+                    // listitem: ListItem,
+                    link: Link,
+                    paragraph: Paragraph,
+                    blockquote: Blockquote,
+                    hr: Hr,
+                    em: Em,
+                    strong: Strong,
+                    codespan: Codespan,
+                  }}
+                  />
               {:else if projectMessage.role === "user"}
                 <div class="w-3/4 ml-auto p-2 rounded-lg border border-border">
                   <p>{projectMessage.text}</p>
