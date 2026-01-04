@@ -48,7 +48,7 @@
 	const { form: formData, enhance } = form;
 </script>
 
-<div class="flex min-h-screen items-center justify-center p-4">
+<div class="flex min-h-screen items-center justify-center p-4 w-full">
 	<div class="w-full max-w-md space-y-8">
 		<div class="text-center">
 			<h1 class="text-3xl font-bold tracking-tight">Sign Up</h1>

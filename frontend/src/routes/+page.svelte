@@ -44,6 +44,18 @@
   import Codespan from "$lib/components/renderers/codespan.svelte";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 
+  const markdownRenderers: any = {
+    code: Code,
+    heading: Heading,
+    link: Link,
+    paragraph: Paragraph,
+    blockquote: Blockquote,
+    hr: Hr,
+    em: Em,
+    strong: Strong,
+    codespan: Codespan,
+  };
+
   interface Project {
     id: string;
     title: string;
@@ -91,6 +103,7 @@
   });
 
   // States
+  // svelte-ignore state_referenced_locally
   let projects = $state(initialPageData.projects);
   let currentProject = $state<Project | undefined>(projects[0]);
   let newProjectLoading = $state(false);
@@ -555,17 +568,7 @@
             <div class="prose prose-sm prose-invert max-w-none">
               <SvelteMarkdown 
                 source={selectedVulnerability.description || "No description available"} 
-                renderers={{
-                  code: Code,
-                  heading: Heading,
-                  link: Link,
-                  paragraph: Paragraph,
-                  blockquote: Blockquote,
-                  hr: Hr,
-                  em: Em,
-                  strong: Strong,
-                  codespan: Codespan,
-                }}
+                renderers={markdownRenderers}
               />
             </div>
           </div>
@@ -843,19 +846,7 @@
               {#if projectMessage.role === "assistant"}
                 <SvelteMarkdown 
                   source={projectMessage.text} 
-                  renderers={{
-                    code: Code,
-                    heading: Heading,
-                    // list: List,
-                    // listitem: ListItem,
-                    link: Link,
-                    paragraph: Paragraph,
-                    blockquote: Blockquote,
-                    hr: Hr,
-                    em: Em,
-                    strong: Strong,
-                    codespan: Codespan,
-                  }}
+                  renderers={markdownRenderers}
                   />
               {:else if projectMessage.role === "user"}
                 <div class="w-3/4 ml-auto p-2 rounded-lg border border-border">

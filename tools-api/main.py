@@ -571,20 +571,18 @@ def xsstrike_scan(request: XSSStrikeScanRequest):
     command = ["python3", "/opt/xsstrike/xsstrike.py", "-u", request.url]
     
     # Add crawl depth
-    command.extend(["--crawl", str(request.crawl)])
+    if request.crawl:
+        command.append("--crawl")
     
     # Add threads
-    command.extend(["--threads", str(request.threads)])
+    command.extend(["-t", str(request.threads)])
     
     # Add timeout
     command.extend(["--timeout", str(request.timeout)])
     
     # Add specific vector if provided
     if request.vector:
-        command.extend(["--vector", request.vector])
-    
-    # Add quiet mode for better output parsing
-    command.append("-q")
+        command.extend(["--data", request.vector])
     
     # Execute command
     result = run_command(command, timeout=600)
