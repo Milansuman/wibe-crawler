@@ -1,6 +1,6 @@
 # Security Tools API
 
-A FastAPI-based REST API that provides structured JSON output from popular security scanning tools including Nmap, SQLmap, Nikto, WhatWeb, and XSSStrike.
+A FastAPI-based REST API that provides structured JSON output from popular security scanning tools including Nmap, SQLmap, Nikto, WhatWeb, XSSStrike, and WPScan.
 
 ## Features
 
@@ -9,6 +9,7 @@ A FastAPI-based REST API that provides structured JSON output from popular secur
 - 🕷️ **Nikto**: Web server vulnerability scanning
 - 🌐 **WhatWeb**: Web technology identification
 - ✅ **XSSStrike**: XSS vulnerability detection and exploitation
+- 🔴 **WPScan**: WordPress vulnerability scanning
 - 📊 **Structured JSON Output**: All tools return parsed, structured JSON responses
 - 🐳 **Dockerized**: Fully containerized with all dependencies
 
@@ -43,6 +44,7 @@ python main.py
 - `apt-get install nmap nikto whatweb` (Debian/Ubuntu)
 - Install SQLmap from: https://github.com/sqlmapproject/sqlmap
 - Install XSSStrike from: https://github.com/s0md3v/XSSStrike
+- Install WPScan from: https://github.com/wpscanteam/wpscan
 
 ## API Endpoints
 
@@ -260,6 +262,59 @@ POST /scan/xsstrike
 }
 ```
 
+### WPScan Scan
+
+```bash
+POST /scan/wpscan
+```
+
+**Request Body:**
+```json
+{
+  "url": "https://example.com",
+  "aggressive": false,
+  "enumerate": "vp,vt,u,m"
+}
+```
+
+**Parameters:**
+- `url` (required): Target WordPress URL to scan
+- `aggressive` (optional): Run in aggressive mode, default: false
+- `enumerate` (optional): What to enumerate:
+  - `vp`: Vulnerable plugins
+  - `vt`: Vulnerable themes
+  - `u`: Users
+  - `m`: Media
+  - default: "vp,vt,u,m"
+- `api_token` (optional): WPScan API token for enhanced vulnerability database
+
+**Response:**
+```json
+{
+  "target": "https://example.com",
+  "wordpress_detected": true,
+  "version": "5.9.2",
+  "vulnerabilities": [
+    "[!] WordPress 5.9.2 is outdated and has known vulnerabilities"
+  ],
+  "plugins": [
+    {
+      "name": "Contact Form 7",
+      "version": "5.4.1"
+    }
+  ],
+  "users": [
+    "admin",
+    "john_doe"
+  ],
+  "scan_summary": {
+    "has_vulnerabilities": true,
+    "plugins_count": 5
+  },
+  "raw_output": "..."
+}
+```
+
 ## API Documentation
 
 Once the server is running, visit:
@@ -298,6 +353,11 @@ curl -X POST http://localhost:8000/scan/whatweb \
 curl -X POST http://localhost:8000/scan/xsstrike \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/search?q=test", "crawl": 2}'
+
+# WPScan scan
+curl -X POST http://localhost:8000/scan/wpscan \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com", "aggressive": false}'
 ```
 
 ### Using Python
@@ -351,6 +411,7 @@ sqlmap --version
 nikto -Version
 whatweb --version
 xsstrike --version
+wpscan --version
 ```
 
 ## License

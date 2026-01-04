@@ -58,6 +58,12 @@ class XSSStrikeScanRequest(BaseModel):
     timeout: Optional[int] = Field(10, description="Timeout for requests (seconds)")
     vector: Optional[str] = Field(None, description="Specific XSS payload vector to test")
 
+class WPScanRequest(BaseModel):
+    url: str = Field(..., description="Target WordPress URL to scan")
+    aggressive: Optional[bool] = Field(False, description="Run in aggressive mode")
+    enumerate: Optional[str] = Field("vp,vt,u,m", description="What to enumerate: vp (vulnerable plugins), vt (vulnerable themes), u (users), m (media)")
+    api_token: Optional[str] = Field(None, description="WPScan API token for vulnerability database")
+
 
 def run_command(command: List[str], timeout: int = 300) -> Dict[str, Any]:
     """Execute a command and return structured output"""
@@ -233,6 +239,53 @@ def parse_xsstrike_output(output: str) -> Dict[str, Any]:
     return parsed
 
 
+def parse_wpscan_output(output: str) -> Dict[str, Any]:
+    """Parse WPScan output into structured JSON"""
+    parsed = {
+        "target": "",
+        "wordpress_detected": False,
+        "version": "",
+        "vulnerabilities": [],
+        "plugins": [],
+        "themes": [],
+        "users": [],
+        "scan_summary": {}
+    }
+    
+    # Check if WordPress was detected
+    if "WordPress" in output or "wordpress" in output.lower():
+        parsed["wordpress_detected"] = True
+    
+    # Extract WordPress version
+    version_pattern = r"(?:WordPress|Version)[^0-9]*([0-9]+\.[0-9]+(?:\.[0-9]+)?)"
+    version_match = re.search(version_pattern, output, re.IGNORECASE)
+    if version_match:
+        parsed["version"] = version_match.group(1)
+    
+    # Extract vulnerabilities
+    vuln_pattern = r"(?:\[\!\]|\[!\])\s*(.+?(?:vulnerability|vulnerable|CVE)[^;]*)"
+    vulns = re.findall(vuln_pattern, output, re.IGNORECASE)
+    parsed["vulnerabilities"] = [v.strip() for v in vulns][:10]
+    
+    # Extract plugins information
+    plugin_pattern = r"(?:Plugin|plugin):\s*(.+?)\s*(?:\(|v|Ver|version)?([0-9]+\.[0-9]+[^\s]*)?.*?(?:\[|vulnerable|$)"
+    plugins = re.findall(plugin_pattern, output, re.IGNORECASE)
+    parsed["plugins"] = [{"name": p[0].strip(), "version": p[1] if p[1] else ""} for p in plugins][:10]
+    
+    # Extract users
+    user_pattern = r"(?:Author|User|Username):\s*(.+?)(?:\n|\s\[|\s-|$)"
+    users = re.findall(user_pattern, output, re.IGNORECASE)
+    parsed["users"] = list(set([u.strip() for u in users if u.strip()]))[:10]
+    
+    # Check for critical findings
+    if len(parsed["vulnerabilities"]) > 0:
+        parsed["scan_summary"]["has_vulnerabilities"] = True
+    if len(parsed["plugins"]) > 0:
+        parsed["scan_summary"]["plugins_count"] = len(parsed["plugins"])
+    
+    return parsed
+
+
 def parse_dig_output(output: str) -> Dict[str, Any]:
     """Parse dig output into structured JSON"""
     parsed = {
@@ -296,6 +349,7 @@ def read_root():
             "nslookup": "/scan/nslookup",
             "dig": "/scan/dig",
             "xsstrike": "/scan/xsstrike",
+            "wpscan": "/scan/wpscan",
             "health": "/health"
         }
     }
@@ -311,7 +365,8 @@ def health_check():
         "whatweb": False,
         "nslookup": False,
         "dig": False,
-        "xsstrike": False
+        "xsstrike": False,
+        "wpscan": False
     }
     
     for tool in tools.keys():
@@ -536,6 +591,44 @@ def xsstrike_scan(request: XSSStrikeScanRequest):
     
     # Parse and return structured output
     parsed = parse_xsstrike_output(result["stdout"] + result["stderr"])
+    parsed["raw_output"] = result["stdout"]
+    if result["stderr"]:
+        parsed["raw_stderr"] = result["stderr"]
+    
+    return parsed
+
+
+@app.post("/scan/wpscan")
+def wpscan_scan(request: WPScanRequest):
+    """Run WPScan scan and return structured results"""
+    command = ["wpscan", "--url", request.url, "--format", "json", "--no-banner"]
+    
+    # Add aggressive mode if enabled
+    if request.aggressive:
+        command.append("--aggressive")
+    
+    # Add enumeration parameters
+    if request.enumerate:
+        command.extend(["--enumerate", request.enumerate])
+    
+    # Add API token if provided
+    if request.api_token:
+        command.extend(["--api-token", request.api_token])
+    
+    # Execute command
+    result = run_command(command, timeout=600)
+    
+    # Try to parse JSON output first
+    try:
+        if result["stdout"].strip():
+            parsed_json = json.loads(result["stdout"])
+            parsed_json["raw_output"] = result["stdout"]
+            return parsed_json
+    except json.JSONDecodeError:
+        pass
+    
+    # Fallback to parsing text output
+    parsed = parse_wpscan_output(result["stdout"] + result["stderr"])
     parsed["raw_output"] = result["stdout"]
     if result["stderr"]:
         parsed["raw_stderr"] = result["stderr"]

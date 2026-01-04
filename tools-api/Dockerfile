@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y \
     libio-pty-perl \
     python3 \
     ruby \
+    ruby-dev \
+    build-essential \
+    dnsutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install sqlmap
@@ -39,6 +42,15 @@ RUN if [ -d "/opt/xsstrike" ]; then \
     else \
     git clone https://github.com/s0md3v/XSSStrike.git /opt/xsstrike || echo "XSSStrike clone failed, will run in degraded mode"; \
     fi || true
+
+# Install WPScan
+RUN git clone --depth 1 https://github.com/wpscanteam/wpscan.git /opt/wpscan \
+    && cd /opt/wpscan \
+    && chmod +x wpscan.rb \
+    && ln -s /opt/wpscan/wpscan.rb /usr/local/bin/wpscan || echo "WPScan installation failed, will run in degraded mode"
+
+# Install WPScan gem as fallback
+RUN gem install wpscan 2>/dev/null || echo "WPScan gem installation failed, using script version"
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
