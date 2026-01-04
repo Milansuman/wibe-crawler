@@ -92,6 +92,24 @@
     cvss: number | null;
   }
 
+  interface Asset {
+    id: string;
+    projectId: string;
+    url: string;
+    type: string;
+    size: number | null;
+    status: number | null;
+  }
+
+  interface TechStack {
+    id: string;
+    projectId: string;
+    name: string;
+    category: string;
+    version: string | null;
+    confidence: string | null;
+  }
+
   const { data: initialPageData }: PageProps = $props();
 
   const session = authClient.useSession();
@@ -119,13 +137,16 @@
   let settingsDialogOpen = $state(false);
   let settingsLoading = $state(false);
   let projectUrls = $state<PageUrl[]>([]);
-  let assetsFound = $state<PageUrl[]>([]);
+  let assetsFound = $state<Asset[]>([]);
+  let projectTechStack = $state<TechStack[]>([]);
   let selectedUrl = $state<PageUrl | undefined>();
   let urlDetailsDialogOpen = $state(false);
   let urlDetailsTab = $state<"html" | "js">("html");
   let projectVulnerabilities = $state<Vulnerability[]>([]);
   let selectedVulnerability = $state<Vulnerability | undefined>();
   let vulnerabilityDetailsDialogOpen = $state(false);
+  let selectedAsset = $state<Asset | undefined>();
+  let assetDetailsDialogOpen = $state(false);
 
   // Handlers
   const handleNewProject = async (event: SubmitEvent) => {
@@ -365,6 +386,32 @@
 
         projectVulnerabilities = data;
       })();
+
+      (async () => {
+        const { data, error } = await safeRPC.projects.getProjectAssets({
+          projectId: currentProject.id,
+        });
+
+        if (error) {
+          console.error(error);
+          return;
+        }
+
+        assetsFound = data;
+      })();
+
+      (async () => {
+        const { data, error } = await safeRPC.projects.getProjectTechStack({
+          projectId: currentProject.id,
+        });
+
+        if (error) {
+          console.error(error);
+          return;
+        }
+
+        projectTechStack = data;
+      })();
     }
   });
 </script>
@@ -576,6 +623,49 @@
       </Dialog.Content>
     </Dialog.Root>
     <Dialog.Root
+      open={assetDetailsDialogOpen}
+      onOpenChange={(open) => (assetDetailsDialogOpen = open)}
+    >
+      <Dialog.Content class="text-foreground max-w-2xl">
+        <Dialog.Header>
+          <Dialog.Title>Asset Details</Dialog.Title>
+          <Dialog.Description class="break-all">
+            {selectedAsset?.url}
+          </Dialog.Description>
+        </Dialog.Header>
+        {#if selectedAsset}
+          <div class="space-y-3 mt-4">
+            <div class="grid grid-cols-2 gap-3">
+              <div class="p-3 rounded-lg bg-secondary/50">
+                <p class="text-xs text-muted-foreground mb-1">Type</p>
+                <p class="text-sm font-medium">{selectedAsset.type}</p>
+              </div>
+              {#if selectedAsset.size}
+              <div class="p-3 rounded-lg bg-secondary/50">
+                <p class="text-xs text-muted-foreground mb-1">Size</p>
+                <p class="text-sm font-medium">
+                  {(selectedAsset.size / 1024).toFixed(2)} KB
+                </p>
+              </div>
+              {/if}
+              {#if selectedAsset.status}
+              <div class="p-3 rounded-lg bg-secondary/50">
+                <p class="text-xs text-muted-foreground mb-1">HTTP Status</p>
+                <p class="text-sm font-medium {selectedAsset.status >= 200 && selectedAsset.status < 300 ? 'text-green-400' : 'text-red-400'}">
+                  {selectedAsset.status}
+                </p>
+              </div>
+              {/if}
+            </div>
+            <div class="p-3 rounded-lg bg-secondary/50">
+              <p class="text-xs text-muted-foreground mb-1">Full URL</p>
+              <p class="text-xs break-all">{selectedAsset.url}</p>
+            </div>
+          </div>
+        {/if}
+      </Dialog.Content>
+    </Dialog.Root>
+    <Dialog.Root
       open={settingsDialogOpen}
       onOpenChange={(open) => (settingsDialogOpen = open)}
     >
@@ -651,11 +741,10 @@
         </div>
       </div>
       <div class="flex flex-row flex-1 overflow-hidden">
-        <div class="w-[70%] border-r border-border flex p-4">
+        <div class="w-[70%] max-w-[70%] border-r border-border flex p-4 overflow-auto">
           <!--DASHBOARD-->
-          <Tabs.Root class="w-full">
+          <Tabs.Root class="w-full" value="urls">
             <Tabs.List>
-              <Tabs.Trigger value="stats">Home</Tabs.Trigger>
               <Tabs.Trigger value="urls">URLs</Tabs.Trigger>
               <Tabs.Trigger value="assets">Assets</Tabs.Trigger>
               <Tabs.Trigger value="stack">Tech Stack</Tabs.Trigger>
@@ -675,7 +764,10 @@
                   </Empty.Description>
                 </Empty.Header>
                 <Empty.Content>
-                  <Button>Start Crawling</Button>
+                  <Button onclick={() => {
+                    promptInput = "Find and save all URLs from this website";
+                    handleAgentPrompt();
+                  }}>Start Crawling</Button>
                 </Empty.Content>
                 </Empty.Root>
               {:else}
@@ -712,7 +804,7 @@
               {/if}
               </div>
             </Tabs.Content>
-            <Tabs.Content value="assets" class="overflow-auto">
+            <Tabs.Content value="assets" class="overflow-auto max-w-200">
               <div class="flex flex-col gap-2 mt-4" class:h-[90%]={assetsFound.length === 0} class:items-center={assetsFound.length === 0} class:justify-center={assetsFound.length === 0}>
               {#if assetsFound.length === 0}
                 <Empty.Root>
@@ -726,35 +818,41 @@
                   </Empty.Description>
                 </Empty.Header>
                 <Empty.Content>
-                  <Button>Start Crawling</Button>
+                  <Button onclick={() => {
+                    promptInput = "Extract and save all assets (images, scripts, stylesheets, fonts, media) from this website";
+                    handleAgentPrompt();
+                  }}>Start Crawling</Button>
                 </Empty.Content>
                 </Empty.Root>
               {:else}
                 <div class="space-y-2 overflow-auto">
-                {#each projectUrls as pageUrl}
+                {#each assetsFound as asset}
                   <button
                   class="w-full text-left p-3 rounded-lg border border-border hover:bg-secondary transition-colors"
                   onclick={() => {
-                    selectedUrl = pageUrl;
-                    urlDetailsDialogOpen = true;
-                    urlDetailsTab = "html";
+                    selectedAsset = asset;
+                    assetDetailsDialogOpen = true;
                   }}
                   >
                   <p class="text-sm font-medium truncate">
-                    {pageUrl.url}
+                    {asset.url}
                   </p>
-                  <div class="flex gap-2 mt-1">
-                    {#if pageUrl.html}
+                  <div class="flex gap-2 mt-1 items-center">
                     <span
                       class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
-                      >HTML</span
+                      >{asset.type}</span
                     >
+                    {#if asset.size}
+                    <span class="text-xs text-muted-foreground">
+                      {(asset.size / 1024).toFixed(2)} KB
+                    </span>
                     {/if}
-                    {#if pageUrl.js}
+                    {#if asset.status}
                     <span
-                      class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded"
-                      >JS</span
+                      class="text-xs px-2 py-0.5 rounded {asset.status >= 200 && asset.status < 300 ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}"
                     >
+                      {asset.status}
+                    </span>
                     {/if}
                   </div>
                   </button>
@@ -763,41 +861,58 @@
               {/if}
               </div>
             </Tabs.Content>
-            <Tabs.Content value="exploits" class="overflow-auto">
-              <div class="flex flex-col gap-2 mt-4">
-                {#if projectVulnerabilities.length === 0}
-                  <p class="text-muted-foreground text-sm">
-                    No vulnerabilities found yet. Chat with the agent to discover security issues.
-                  </p>
-                {:else}
-                  <div class="space-y-2 overflow-auto">
-                    {#each projectVulnerabilities as vuln}
-                      <button
-                        class="w-full text-left p-3 rounded-lg border border-border hover:bg-secondary transition-colors"
-                        onclick={() => {
-                          selectedVulnerability = vuln;
-                          vulnerabilityDetailsDialogOpen = true;
-                        }}
+            <Tabs.Content value="stack" class="overflow-auto">
+              <div class="flex flex-col gap-2 mt-4" class:h-[90%]={projectTechStack.length === 0} class:items-center={projectTechStack.length === 0} class:justify-center={projectTechStack.length === 0}>
+              {#if projectTechStack.length === 0}
+                <Empty.Root>
+                <Empty.Header>
+                  <Empty.Media variant="icon">
+                  <Settings color="#3b82f6"/>
+                  </Empty.Media>
+                  <Empty.Title>No Tech Stack Detected Yet</Empty.Title>
+                  <Empty.Description>
+                  Analyze your website to detect frameworks, libraries, and technologies
+                  </Empty.Description>
+                </Empty.Header>
+                <Empty.Content>
+                  <Button onclick={() => {
+                    promptInput = "Detect and identify all technologies, frameworks, libraries, and tools used by this website";
+                    handleAgentPrompt();
+                  }}>Start Analysis</Button>
+                </Empty.Content>
+                </Empty.Root>
+              {:else}
+                <div class="space-y-2 overflow-auto">
+                {#each projectTechStack as tech}
+                  <div
+                    class="w-full text-left p-3 rounded-lg border border-border bg-card"
+                  >
+                    <div class="flex items-center justify-between">
+                      <p class="text-sm font-medium">
+                        {tech.name}
+                      </p>
+                      <span
+                        class="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary"
                       >
-                        <div class="flex items-center justify-between">
-                          <p class="text-sm font-medium truncate flex-1 mr-2">
-                            {vuln.title}
-                          </p>
-                          <span
-                            class="text-xs px-2 py-0.5 rounded font-medium {vuln.cvss !== null && vuln.cvss >= 9 ? 'bg-red-500/20 text-red-400' : vuln.cvss !== null && vuln.cvss >= 7 ? 'bg-orange-500/20 text-orange-400' : vuln.cvss !== null && vuln.cvss >= 4 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}"
-                          >
-                            {vuln.cvss !== null ? `CVSS ${vuln.cvss}` : 'N/A'}
-                          </span>
-                        </div>
-                        {#if vuln.description}
-                          <p class="text-xs text-muted-foreground mt-1 line-clamp-2">
-                            {vuln.description.slice(0, 100)}{vuln.description.length > 100 ? '...' : ''}
-                          </p>
-                        {/if}
-                      </button>
-                    {/each}
+                        {tech.category}
+                      </span>
+                    </div>
+                    <div class="flex gap-2 mt-1 items-center">
+                      {#if tech.version}
+                      <span class="text-xs text-muted-foreground">
+                        v{tech.version}
+                      </span>
+                      {/if}
+                      <span
+                        class="text-xs px-2 py-0.5 rounded {tech.confidence === 'high' ? 'bg-green-500/20 text-green-400' : tech.confidence === 'medium' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-500/20 text-gray-400'}"
+                      >
+                        {tech.confidence} confidence
+                      </span>
+                    </div>
                   </div>
-                {/if}
+                {/each}
+                </div>
+              {/if}
               </div>
             </Tabs.Content>
             <Tabs.Content value="exploits" class="overflow-auto">
@@ -872,6 +987,12 @@
                 </div>
               {/if}
             {/each}
+            {#if isStreaming}
+              <div class="flex flex-row gap-2 items-center text-muted-foreground">
+                <p>Thinking</p>
+                <Spinner/>
+              </div>
+            {/if}
           </div>
           <div class="mt-auto pt-4 border-t border-border">
             <InputGroup.Root>

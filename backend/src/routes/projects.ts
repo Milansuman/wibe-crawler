@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { authenticated } from "../middleware/auth";
 import {z} from "zod";
 import { db } from "../../lib/db";
-import { pages, projectMessages, projects, vulnerabilities } from "../../lib/db/schema";
+import { pages, projectMessages, projects, vulnerabilities, assets, techStack } from "../../lib/db/schema";
 import { and, asc, desc, eq } from "drizzle-orm";
 import puppeteer from "puppeteer";
 import { getTitleFromPage } from "../../lib/crawler";
@@ -152,6 +152,40 @@ export default {
           .orderBy(desc(vulnerabilities.cvss));
 
         return vulns;
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
+  getProjectAssets: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input}) => {
+      try {
+        const projectAssets = await db.select()
+          .from(assets)
+          .where(eq(assets.projectId, input.projectId));
+
+        return projectAssets;
+      } catch (error) {
+        if(error instanceof ORPCError) throw error;
+
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+    }),
+  getProjectTechStack: authenticated
+    .input(z.object({
+      projectId: z.string()
+    }))
+    .handler(async ({input}) => {
+      try {
+        const stack = await db.select()
+          .from(techStack)
+          .where(eq(techStack.projectId, input.projectId));
+
+        return stack;
       } catch (error) {
         if(error instanceof ORPCError) throw error;
 

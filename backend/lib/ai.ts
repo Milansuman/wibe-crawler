@@ -7,7 +7,7 @@ import puppeteer from 'puppeteer';
 import { getUrlsFromPage, getSubdomainsFromPage, getEmailsFromPage, getCookiesFromPage, getNetworkRequestsFromPage, getPageContent } from './crawler';
 import { savePage, queryPageDOM, getPageForms, getPageInputs, getScriptChunk, searchInScripts, getPageMetadata, getScriptStats } from './page-storage';
 import { db } from './db';
-import { vulnerabilities } from './db/schema';
+import { vulnerabilities, assets as assets_table, techStack as techStack_table } from './db/schema';
 
 interface Message {
   role: "system" | "user" | "tool" | "assistant"
@@ -639,6 +639,277 @@ export function generateTools(projectId: string, cookies?: string, localStorage?
           });
         } catch (error) {
           return JSON.stringify({ error: `Failed to save vulnerability: ${error}` });
+        }
+      }
+    },
+    saveTechStack: {
+      description: "Save a detected technology to the database. Use this tool when you've identified a specific technology, framework, library, CMS, server, or tool used by the website. This allows for manual curation and verification of the tech stack.",
+      inputSchema: z.object({
+        name: z.string().describe("Name of the technology (e.g., 'React', 'WordPress', 'Nginx', 'jQuery', 'Google Analytics')"),
+        category: z.string().describe("Category of technology: framework, library, cdn, server, cms, analytics, database, tool, language, etc."),
+        version: z.string().optional().describe("Version of the technology if identifiable (e.g., '18.2.0', '5.9.3')"),
+        confidence: z.enum(['high', 'medium', 'low']).optional().describe("Confidence level of the detection: high (confirmed), medium (likely), low (possible). Default: medium")
+      }),
+      execute: async ({ name, category, version, confidence }) => {
+        try {
+          const [tech] = await db.insert(techStack_table).values({
+            projectId,
+            name,
+            category,
+            version: version || null,
+            confidence: confidence || 'medium'
+          }).returning();
+
+          return JSON.stringify({
+            success: true,
+            message: `Technology saved successfully with ID: ${tech.id}`,
+            technology: {
+              id: tech.id,
+              name: tech.name,
+              category: tech.category,
+              version: tech.version,
+              confidence: tech.confidence
+            }
+          });
+        } catch (error) {
+          return JSON.stringify({ error: `Failed to save technology: ${error}` });
+        }
+      }
+    },
+    getPageAssets: {
+      description: "Extract and save all assets (images, stylesheets, scripts, fonts, media) from a web page. Captures URLs, types, sizes, and HTTP status codes. Essential for mapping the complete attack surface and finding exposed or vulnerable resources.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the webpage to extract assets from")
+      }),
+      execute: async ({ url }) => {
+        const browser = await puppeteer.launch();
+        try {
+          const page = await browser.newPage();
+          
+          // Set cookies and localStorage if provided
+          if (crawlerOptions.cookies) {
+            await page.setCookie(...crawlerOptions.cookies);
+          }
+          if (crawlerOptions.localStorage) {
+            await page.evaluateOnNewDocument((localStorageData) => {
+              for (const [key, value] of Object.entries(localStorageData)) {
+                localStorage.setItem(key, JSON.stringify(value));
+              }
+            }, crawlerOptions.localStorage);
+          }
+
+          const assets: Array<{ url: string; type: string; size: number | null; status: number | null }> = [];
+          
+          // Track network requests for assets
+          page.on('response', async (response) => {
+            const resourceType = response.request().resourceType();
+            const assetUrl = response.url();
+            
+            if (['image', 'stylesheet', 'script', 'font', 'media'].includes(resourceType)) {
+              try {
+                const headers = response.headers();
+                const contentLength = headers['content-length'];
+                
+                assets.push({
+                  url: assetUrl,
+                  type: resourceType,
+                  size: contentLength ? parseInt(contentLength) : null,
+                  status: response.status()
+                });
+              } catch (error) {
+                // Ignore errors for individual resources
+              }
+            }
+          });
+
+          await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+          await browser.close();
+
+          // Save assets to database
+          if (assets.length > 0) {
+            await db.insert(assets_table).values(
+              assets.map(asset => ({
+                projectId,
+                url: asset.url,
+                type: asset.type,
+                size: asset.size,
+                status: asset.status
+              }))
+            );
+          }
+
+          return JSON.stringify({
+            success: true,
+            message: `Found and saved ${assets.length} assets`,
+            summary: {
+              total: assets.length,
+              byType: assets.reduce((acc, asset) => {
+                acc[asset.type] = (acc[asset.type] || 0) + 1;
+                return acc;
+              }, {} as Record<string, number>),
+              totalSize: assets.reduce((sum, asset) => sum + (asset.size || 0), 0)
+            },
+            assets: assets.slice(0, 20) // Return first 20 for review
+          });
+        } catch (error) {
+          await browser.close();
+          return JSON.stringify({ error: `Failed to extract assets: ${error}` });
+        }
+      }
+    },
+    detectTechStack: {
+      description: "Detect and identify technologies used by a website including frameworks, libraries, CMS, analytics, CDNs, servers, and more. Uses multiple detection methods: meta tags, scripts, headers, DOM patterns, and WhatWeb integration. Saves findings to database with confidence levels.",
+      inputSchema: z.object({
+        url: z.string().url().describe("URL of the website to analyze for technology stack")
+      }),
+      execute: async ({ url }) => {
+        const browser = await puppeteer.launch();
+        try {
+          const page = await browser.newPage();
+          
+          // Set cookies and localStorage if provided
+          if (crawlerOptions.cookies) {
+            await page.setCookie(...crawlerOptions.cookies);
+          }
+          if (crawlerOptions.localStorage) {
+            await page.evaluateOnNewDocument((localStorageData) => {
+              for (const [key, value] of Object.entries(localStorageData)) {
+                localStorage.setItem(key, JSON.stringify(value));
+              }
+            }, crawlerOptions.localStorage);
+          }
+
+          const technologies: Array<{ name: string; category: string; version: string | null; confidence: string }> = [];
+          let responseHeaders: Record<string, string> = {};
+
+          // Capture response headers
+          page.on('response', async (response) => {
+            if (response.url() === url) {
+              responseHeaders = response.headers();
+            }
+          });
+
+          await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+
+          // Detect technologies from page content
+          const detectedTech = await page.evaluate(() => {
+            const tech: Array<{ name: string; category: string; version: string | null; confidence: string }> = [];
+
+            // Check for common frameworks and libraries
+            if (typeof (window as any).React !== 'undefined') {
+              tech.push({ name: 'React', category: 'framework', version: (window as any).React?.version || null, confidence: 'high' });
+            }
+            if (typeof (window as any).Vue !== 'undefined') {
+              tech.push({ name: 'Vue.js', category: 'framework', version: (window as any).Vue?.version || null, confidence: 'high' });
+            }
+            if (typeof (window as any).angular !== 'undefined') {
+              tech.push({ name: 'Angular', category: 'framework', version: (window as any).angular?.version?.full || null, confidence: 'high' });
+            }
+            if (typeof (window as any).$ !== 'undefined' && typeof (window as any).jQuery !== 'undefined') {
+              tech.push({ name: 'jQuery', category: 'library', version: (window as any).jQuery?.fn?.jquery || null, confidence: 'high' });
+            }
+            if (typeof (window as any).next !== 'undefined') {
+              tech.push({ name: 'Next.js', category: 'framework', version: null, confidence: 'high' });
+            }
+            if (typeof (window as any).Svelte !== 'undefined') {
+              tech.push({ name: 'Svelte', category: 'framework', version: null, confidence: 'high' });
+            }
+
+            // Check meta tags
+            const metaGenerator = document.querySelector('meta[name="generator"]');
+            if (metaGenerator) {
+              const content = metaGenerator.getAttribute('content') || '';
+              tech.push({ name: content, category: 'cms', version: null, confidence: 'high' });
+            }
+
+            // Check for WordPress
+            if (document.body.classList.contains('wordpress') || 
+                document.querySelector('link[href*="wp-content"]') ||
+                document.querySelector('script[src*="wp-includes"]')) {
+              tech.push({ name: 'WordPress', category: 'cms', version: null, confidence: 'high' });
+            }
+
+            // Check for analytics
+            if (typeof (window as any).gtag !== 'undefined' || document.querySelector('script[src*="googletagmanager"]')) {
+              tech.push({ name: 'Google Analytics', category: 'analytics', version: null, confidence: 'high' });
+            }
+            if (typeof (window as any).ga !== 'undefined') {
+              tech.push({ name: 'Google Analytics', category: 'analytics', version: null, confidence: 'high' });
+            }
+
+            // Check for CDNs in script sources
+            const scripts = Array.from(document.querySelectorAll('script[src]'));
+            scripts.forEach(script => {
+              const src = script.getAttribute('src') || '';
+              if (src.includes('cloudflare')) {
+                tech.push({ name: 'Cloudflare', category: 'cdn', version: null, confidence: 'medium' });
+              }
+              if (src.includes('cdn.jsdelivr.net')) {
+                tech.push({ name: 'jsDelivr', category: 'cdn', version: null, confidence: 'high' });
+              }
+              if (src.includes('unpkg.com')) {
+                tech.push({ name: 'unpkg', category: 'cdn', version: null, confidence: 'high' });
+              }
+            });
+
+            return tech;
+          });
+
+          technologies.push(...detectedTech);
+
+          // Detect from response headers
+          if (responseHeaders['server']) {
+            technologies.push({ 
+              name: responseHeaders['server'], 
+              category: 'server', 
+              version: null, 
+              confidence: 'high' 
+            });
+          }
+          if (responseHeaders['x-powered-by']) {
+            technologies.push({ 
+              name: responseHeaders['x-powered-by'], 
+              category: 'server', 
+              version: null, 
+              confidence: 'high' 
+            });
+          }
+
+          await browser.close();
+
+          // Remove duplicates
+          const uniqueTech = Array.from(
+            new Map(technologies.map(t => [t.name.toLowerCase(), t])).values()
+          );
+
+          // Save to database
+          if (uniqueTech.length > 0) {
+            await db.insert(techStack_table).values(
+              uniqueTech.map(tech => ({
+                projectId,
+                name: tech.name,
+                category: tech.category,
+                version: tech.version,
+                confidence: tech.confidence
+              }))
+            );
+          }
+
+          return JSON.stringify({
+            success: true,
+            message: `Detected and saved ${uniqueTech.length} technologies`,
+            summary: {
+              total: uniqueTech.length,
+              byCategory: uniqueTech.reduce((acc, tech) => {
+                acc[tech.category] = (acc[tech.category] || 0) + 1;
+                return acc;
+              }, {} as Record<string, number>)
+            },
+            technologies: uniqueTech
+          });
+        } catch (error) {
+          await browser.close();
+          return JSON.stringify({ error: `Failed to detect technologies: ${error}` });
         }
       }
     }

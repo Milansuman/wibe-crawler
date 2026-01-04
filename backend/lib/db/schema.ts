@@ -147,3 +147,25 @@ export const pages = pgTable("pages", {
   html: text(),
   cookies: text()
 }).enableRLS();
+
+export const assets = pgTable("assets", {
+  id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }).notNull(),
+  url: text().notNull(),
+  type: text().notNull(), // image, script, stylesheet, font, media, etc.
+  size: integer(), // size in bytes
+  status: integer() // HTTP status code
+}).enableRLS();
+
+export const techStack = pgTable("tech_stack", {
+  id: uuid().defaultRandom().primaryKey(),
+  projectId: uuid().references(() => projects.id, {
+    onDelete: "cascade"
+  }).notNull(),
+  name: text().notNull(),
+  category: text().notNull(), // framework, library, cdn, server, cms, analytics, etc.
+  version: text(),
+  confidence: text() // high, medium, low
+}).enableRLS();
