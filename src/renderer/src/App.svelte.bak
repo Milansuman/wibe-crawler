@@ -54,7 +54,6 @@
   onMount(() => {
     if (window.api?.crawler) {
       window.api.crawler.onProgress((data) => {
-        console.log('Received progress data:', data) // Debug log
         crawlStatus = `Crawling: ${data.currentUrl}`
         fullCrawlResults = data.results
         crawledUrls = data.results.map((r: any) => r.url)
@@ -101,7 +100,6 @@
   })
 
   async function startScan(url, context = { cookies: [], localStorage: {} }) {
-    console.log('App.startScan called with:', url)
     if (!url || isScanning) return
 
     try {
@@ -182,27 +180,8 @@
 
       if (response.success && response.report) {
         console.log('Report generated:', response.report)
-
-        // Import PDF generator dynamically
-        const { generateVulnerabilityPDF } = await import('./utils/pdfGenerator')
-
-        // Generate and download PDF
-        generateVulnerabilityPDF(
-          {
-            ...response.report,
-            vulnerabilities: vulnerabilities // Use UI-formatted vulnerabilities
-          },
-          {
-            targetUrl: scannedBaseUrl,
-            scannedAt: new Date(),
-            totalUrls: fullCrawlResults.length,
-            totalForms: fullCrawlResults.reduce((sum, r) => sum + r.forms.length, 0),
-            totalCookies: allCookies.length,
-            totalApiCalls: allApiCalls.length
-          }
-        )
-
-        crawlStatus = `PDF report exported successfully at ${new Date().toLocaleTimeString()}`
+        // For now, we just show success
+        crawlStatus = `Report generated successfully at ${new Date().toLocaleTimeString()}`
       } else {
         console.error('Report generation error:', response.error)
         crawlStatus = `Report generation failed: ${response.error}`
@@ -277,15 +256,7 @@
     activeTargetTab = tab
   }
   async function analyzeVulnerabilities() {
-    console.log('analyzeVulnerabilities called. State:', {
-      isScanning,
-      isAnalyzing,
-      resultsLength: fullCrawlResults.length
-    })
-    if (isScanning || isAnalyzing || fullCrawlResults.length === 0) {
-      console.log('Skipping analysis due to guard clause')
-      return
-    }
+    if (isScanning || isAnalyzing || fullCrawlResults.length === 0) return
 
     try {
       isAnalyzing = true
@@ -352,7 +323,7 @@
     <!-- Main Content Area -->
     <div class="flex-1 p-3 overflow-y-auto">
       {#if !showResults}
-        <EmptyState />
+        <EmptyState message="Enter a URL and click "Start Scan" to begin" />
       {:else}
         <div class="h-full flex flex-col">
           <!-- Tab Navigation -->

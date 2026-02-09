@@ -9,6 +9,8 @@
   export let low
   export let onStartScan
   export let onStopScan
+  export let onAnalyze
+  export let isAnalyzing = false
 
   let selectedUrl = 'https://'
   let mirrorEl
@@ -31,6 +33,14 @@
 
   function handleStartScan() {
     if (selectedUrl && !isScanning) {
+      // Fix potential double protocol issue
+      let urlToScan = selectedUrl.trim()
+      if (urlToScan.startsWith('https://http://')) {
+        urlToScan = urlToScan.replace('https://http://', 'http://')
+      } else if (urlToScan.startsWith('https://https://')) {
+        urlToScan = urlToScan.replace('https://https://', 'https://')
+      }
+
       cookiesError = ''
       localStorageError = ''
 
@@ -39,7 +49,10 @@
 
       if (cookiesInput.trim()) {
         try {
-          const cookiePairs = cookiesInput.split(';').map(pair => pair.trim()).filter(pair => pair)
+          const cookiePairs = cookiesInput
+            .split(';')
+            .map((pair) => pair.trim())
+            .filter((pair) => pair)
           for (const pair of cookiePairs) {
             const equalIndex = pair.indexOf('=')
             if (equalIndex === -1) {
@@ -66,7 +79,7 @@
       }
 
       if (localStorageInput.trim()) {
-        const lines = localStorageInput.split('\n').filter(line => line.trim())
+        const lines = localStorageInput.split('\n').filter((line) => line.trim())
         for (const line of lines) {
           const colonIndex = line.indexOf(':')
           if (colonIndex === -1) {
@@ -84,7 +97,7 @@
       }
       console.log(cookies)
 
-      onStartScan(selectedUrl, { cookies, localStorage })
+      onStartScan(urlToScan, { cookies, localStorage })
     }
   }
 </script>
@@ -107,10 +120,9 @@
   {/if}
   <div class="flex gap-2">
     <div class="relative flex-1">
-      <span
-        bind:this={mirrorEl}
-        class="invisible absolute top-0 left-3 text-xs whitespace-pre"
-      >{selectedUrl}</span>
+      <span bind:this={mirrorEl} class="invisible absolute top-0 left-3 text-xs whitespace-pre"
+        >{selectedUrl}</span
+      >
       <input
         bind:value={selectedUrl}
         placeholder="https://example.com"
@@ -120,23 +132,32 @@
       {#if showUrlHint}
         <span
           class="absolute top-1/2 -translate-y-1/2 text-xs text-gray-600 pointer-events-none"
-          style={`left: ${prefixWidth + 12}px;`}
-        >example.com</span>
+          style={`left: ${prefixWidth + 12}px;`}>example.com</span
+        >
       {/if}
     </div>
     <button
-      on:click={() => showAdvanced = !showAdvanced}
+      on:click={() => (showAdvanced = !showAdvanced)}
       class="border border-gray-700 hover:border-gray-500 px-4 py-2 text-xs"
     >
       {showAdvanced ? 'Hide' : 'Advanced'}
     </button>
     <button
       on:click={handleStartScan}
-      disabled={isScanning || !selectedUrl}
+      disabled={isScanning || isAnalyzing || !selectedUrl}
       class="border border-gray-700 hover:border-gray-500 disabled:border-gray-800 disabled:text-gray-600 px-4 py-2 text-xs"
     >
       {isScanning ? 'Scanning...' : 'Scan'}
     </button>
+    {#if showResults && !isScanning}
+      <button
+        on:click={onAnalyze}
+        disabled={isAnalyzing}
+        class="border border-purple-700 text-purple-300 hover:border-purple-500 hover:text-purple-200 disabled:border-gray-800 disabled:text-gray-600 px-4 py-2 text-xs"
+      >
+        {isAnalyzing ? 'Analyzing...' : 'Analyze'}
+      </button>
+    {/if}
     {#if isScanning}
       <button
         on:click={onStopScan}

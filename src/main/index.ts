@@ -2,8 +2,11 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { WebCrawler, CrawlResult } from './crawler'
+import { WebCrawler, CrawlResult } from './crawler_native'
 import { DirectoryFuzzer, type FuzzResult, getAvailableWordlists } from './fuzzer'
+import { VulnerabilityAgent, CrawledDataSummary } from './agent'
+
+// ... existing code ...
 
 function createWindow(): void {
   // Create the browser window.
@@ -88,57 +91,57 @@ app.whenReady().then(() => {
   let crawler: WebCrawler | null = null
   let fuzzer: DirectoryFuzzer | null = null
 
-  ipcMain.handle('start-crawl', async (_, url: string, context?: any) => {
+  ipcMain.handle('start-crawl', async (event, url: string, context?: any) => {
+    console.log(`[IPC] start-crawl received for: ${url}`)
     if (crawler) {
-      await crawler.close()
+      console.log('[IPC] Closing existing crawler instance...')
+      try {
+        await crawler.close()
+      } catch (err) {
+        console.error('Error closing crawler:', err)
+      }
+      crawler = null
     }
 
     console.log(context);
+    const sender = event.sender
 
     crawler = new WebCrawler(
       context,
       (currentUrl: string, results: CrawlResult[]) => {
         // Send progress updates to renderer
-        const window = BrowserWindow.getFocusedWindow()
-        if (window) {
-          window.webContents.send('crawl-progress', {
-            currentUrl,
-            results: results.map((r) => ({
-              url: r.url,
-              status: r.status,
-              title: r.title,
-              forms: r.forms,
-              apiCalls: r.apiCalls,
-              cookies: r.cookies,
-              emails: r.emails,
-              assets: r.assets,
-              error: r.error
-            })),
-            domains: crawler!.getAllDiscoveredDomains(),
-            allApiCalls: crawler!.getAllApiCalls(),
-            allCookies: crawler!.getAllCookies(),
-            allEmails: crawler!.getAllEmails(),
-            allAssets: crawler!.getAllAssets()
-          })
-        }
+        sender.send('crawl-progress', {
+          currentUrl,
+          results: results.map((r) => ({
+            url: r.url,
+            status: r.status,
+            title: r.title,
+            forms: r.forms,
+            apiCalls: r.apiCalls,
+            cookies: r.cookies,
+            emails: r.emails,
+            assets: r.assets,
+            error: r.error
+          })),
+          domains: crawler!.getAllDiscoveredDomains(),
+          allApiCalls: crawler!.getAllApiCalls(),
+          allCookies: crawler!.getAllCookies(),
+          allEmails: crawler!.getAllEmails(),
+          allAssets: crawler!.getAllAssets()
+        })
       },
       (urls: string[]) => {
         // Send URL discovery updates to renderer
-        const window = BrowserWindow.getFocusedWindow()
-        if (window) {
-          window.webContents.send('urls-discovered', {
-            urls
-          })
-        }
+        sender.send('urls-discovered', {
+          urls
+        })
       }
     )
 
     try {
       console.log('start crawl', context)
       const results = await crawler.crawl(url, 10000)
-      const window = BrowserWindow.getFocusedWindow()
-      if (window) {
-        window.webContents.send('crawl-complete', {
+      sender.send('crawl-complete', {
           results: results.map((r) => ({
             url: r.url,
             status: r.status,
@@ -156,16 +159,13 @@ app.whenReady().then(() => {
           allEmails: crawler.getAllEmails(),
           allAssets: crawler.getAllAssets()
         })
-      }
       return { success: true, results }
     } catch (error) {
-      console.error(error)
-      const window = BrowserWindow.getFocusedWindow()
-      if (window) {
-        window.webContents.send('crawl-error', {
-          error: error instanceof Error ? error.message : 'Unknown error'
-        })
-      }
+      console.error('Crawl failed:', error)
+      sender.send('crawl-error', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      })
+      crawler = null
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
@@ -216,7 +216,7 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('start-fuzz', async (_, options: {
+  ipcMain.handle('start-fuzz', async (event, options: {
     baseUrl: string
     wordlist: string
     extensions: string[]
@@ -228,6 +228,7 @@ app.whenReady().then(() => {
     }
 
     try {
+      const sender = event.sender
       fuzzer = new DirectoryFuzzer(
         options.baseUrl,
         options.wordlist,
@@ -235,18 +236,12 @@ app.whenReady().then(() => {
         options.concurrency
       )
 
-      const window = BrowserWindow.getFocusedWindow()
-
       fuzzer.fuzz(
         (result: FuzzResult) => {
-          if (window) {
-            window.webContents.send('fuzz-progress', result)
-          }
+          sender.send('fuzz-progress', result)
         },
         (results: FuzzResult[]) => {
-          if (window) {
-            window.webContents.send('fuzz-complete', { results })
-          }
+          sender.send('fuzz-complete', { results })
           fuzzer = null
         }
       )
@@ -274,6 +269,65 @@ app.whenReady().then(() => {
       }
     }
     return { success: true }
+  })
+
+  // Vulnerability Analysis
+  let vulnerabilityAgent: VulnerabilityAgent | null = null
+
+  try {
+    vulnerabilityAgent = new VulnerabilityAgent(process.env.GROQ_API_KEY)
+  } catch (error) {
+    console.warn('Failed to initialize VulnerabilityAgent:', error)
+  }
+
+  ipcMain.handle('analyze-vulnerabilities', async (_, data: CrawledDataSummary) => {
+    console.log('[IPC] analyze-vulnerabilities received')
+    if (!vulnerabilityAgent) {
+      console.log('Initializing VulnerabilityAgent with key:', process.env.GROQ_API_KEY ? 'YES' : 'NO')
+      // Try to initialize again if key is provided later or via env
+      try {
+        vulnerabilityAgent = new VulnerabilityAgent(process.env.GROQ_API_KEY)
+      } catch (error) {
+        console.error('Failed to init agent:', error)
+        return { 
+          success: false, 
+          error: 'Vulnerability analysis requires GROQ_API_KEY environment variable. Please add it to your .env file.' 
+        }
+      }
+    }
+
+    try {
+      console.log('Calling agent.analyzeForVulnerabilities...')
+      const report = await vulnerabilityAgent.analyzeForVulnerabilities(data)
+      console.log('Analysis complete, report:', report ? 'Generated' : 'Null')
+      return { success: true, report }
+    } catch (error) {
+      console.error('Vulnerability analysis failed:', error)
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error during analysis' 
+      }
+    }
+  })
+
+  ipcMain.handle('generate-report', async (_, { vulnerabilities, data, url }) => {
+    if (!vulnerabilityAgent) {
+      return { 
+        success: false, 
+        error: 'Report generation requires GROQ_API_KEY environment variable.' 
+      }
+    }
+
+    try {
+      const report = await vulnerabilityAgent.generateFullReport(vulnerabilities, data, url)
+      return { success: true, report }
+    } catch (error) {
+      console.error('Report generation failed:', error)
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error during report generation' 
+      }
+    }
   })
 
   // Window controls

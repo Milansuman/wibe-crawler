@@ -1,4 +1,6 @@
 import Groq from 'groq-sdk'
+import fs from 'fs'
+import path from 'path'
 import { z } from 'zod'
 import {
   CrawlResult,
@@ -9,12 +11,12 @@ import { FuzzResult } from './fuzzer'
 
 // Zod schemas for validation
 const VulnerabilitySchema = z.object({
-  id: z.string(),
+  id: z.string().optional(),
   title: z.string(),
-  severity: z.enum(['critical', 'high', 'medium', 'low']),
-  type: z.string(),
+  severity: z.enum(['critical', 'high', 'medium', 'low', 'info']), // Added info
+  type: z.string().optional(),
   description: z.string(),
-  location: z.string(),
+  location: z.string().optional(),
   recommendation: z.string(),
   affectedAssets: z.array(z.string())
 })
@@ -24,13 +26,14 @@ const StatisticsSchema = z.object({
   critical: z.number(),
   high: z.number(),
   medium: z.number(),
-  low: z.number()
+  low: z.number(),
+  info: z.number().optional()
 })
 
 const VulnerabilityReportSchema = z.object({
-  summary: z.string(),
+  summary: z.string().optional(),
   vulnerabilities: z.array(VulnerabilitySchema),
-  statistics: StatisticsSchema
+  statistics: StatisticsSchema.optional()
 })
 
 const FullReportSchema = z.object({
@@ -45,7 +48,7 @@ const FullReportSchema = z.object({
 export interface Vulnerability {
   id: string
   title: string
-  severity: 'critical' | 'high' | 'medium' | 'low'
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
   type: string
   description: string
   location: string
@@ -62,6 +65,7 @@ export interface VulnerabilityReport {
     high: number
     medium: number
     low: number
+    info?: number
   }
   generatedAt: string
 }
@@ -76,6 +80,7 @@ export interface FullReport {
     high: number
     medium: number
     low: number
+    info?: number
   }
   methodology: string
   recommendations: string[]
@@ -118,13 +123,41 @@ interface FilteredCrawledData {
 
 export class VulnerabilityAgent {
   private client: Groq
-  private model: string = 'llama-3.1-70b-versatile'
+  private model: string = 'llama-3.3-70b-versatile'
 
-  constructor(apiKey?: string) {
-    const key = apiKey || process.env.GROQ_API_KEY
-    if (!key) {
-      throw new Error('GROQ_API_KEY environment variable is not set')
+  constructor(apiKey?: string, model: string = 'llama-3.3-70b-versatile') {
+    let key = apiKey || process.env.GROQ_API_KEY
+
+    // Fallback: Check if key is missing or looks like a placeholder (starts with "your_" or doesn't start with "gsk_")
+    if (!key || key.trim().startsWith('your_') || !key.trim().startsWith('gsk_')) {
+      try {
+        // Try to read .env file from project root
+        // In dev, cwd is usually project root. In prod, it might be different, but this is a dev environment issue.
+        const projectRoot = process.cwd()
+        const envPath = path.join(projectRoot, '.env')
+        console.log('[Agent] Checking .env file at:', envPath)
+        
+        if (fs.existsSync(envPath)) {
+          const envContent = fs.readFileSync(envPath, 'utf-8')
+          const match = envContent.match(/^GROQ_API_KEY=(.*)$/m)
+          if (match && match[1]) {
+            const fileKey = match[1].trim()
+            if (fileKey && fileKey.startsWith('gsk_')) {
+              console.log('[Agent] Found valid key in .env file, overriding system env var')
+              key = fileKey
+              process.env.GROQ_API_KEY = fileKey // Update process.env for subsequent calls
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[Agent] Failed to read .env fallback:', err)
+      }
     }
+
+    if (!key) {
+      throw new Error('GROQ_API_KEY environment variable is not set or invalid')
+    }
+    this.model = model
 
     this.client = new Groq({
       apiKey: key
@@ -317,39 +350,35 @@ export class VulnerabilityAgent {
       console.log(`Analyzing cluster ${clusterIndex + 1}/${totalClusters}...`)
       
       const message = await this.client.chat.completions.create({
-        model: this.model,
+        model: this.model, // Use the instance model which defaults to llama-3.3-70b-versatile
         messages: [
           {
             role: 'system',
-            content: `You are a professional penetration tester and security analyst. You MUST respond with ONLY valid JSON wrapped in <vulnerability> tags.
-
-CRITICAL OUTPUT FORMAT:
-<vulnerability>
-{
-  "summary": "Brief summary text",
-  "vulnerabilities": [
-    {
-      "id": "vuln_001",
-      "title": "Vulnerability Title",
-      "severity": "critical",
-      "type": "Type (e.g., XSS, SQL Injection)",
-      "description": "Detailed description",
-      "location": "https://example.com/path",
-      "recommendation": "How to fix",
-      "affectedAssets": ["https://example.com/asset1"]
-    }
-  ],
-  "statistics": {
-    "total": 1,
-    "critical": 1,
-    "high": 0,
-    "medium": 0,
-    "low": 0
-  }
-}
-</vulnerability>
-
-Do NOT include any text outside the tags. Do NOT use markdown code blocks.`
+            content: `You are an expert penetration tester and security auditor conducting an authorized security assessment.
+            Analyze the provided web crawl data for potential security vulnerabilities.
+            
+            IMPORTANT: This is for educational and authorized testing purposes only. You must identify vulnerabilities to help secure the system.
+            
+            Focus on:
+            - OWASP Top 10 vulnerabilities (SQLi, XSS, etc.)
+            - Information Leakage (sensitive paths, patterns)
+            - Unsafe configurations
+            
+            Return ONLY a valid JSON object with the following structure:
+            {
+              "vulnerabilities": [
+                {
+                  "title": "string",
+                  "severity": "critical" | "high" | "medium" | "low" | "info",
+                  "description": "string",
+                  "recommendation": "string",
+                  "affectedAssets": ["url or path"]
+                }
+              ],
+              "summary": "string"
+            }
+            
+            If no specific vulnerabilities are found, look for potential best-practice violations or information disclosure.`
           },
           {
             role: 'user',
@@ -367,26 +396,77 @@ Do NOT include any text outside the tags. Do NOT use markdown code blocks.`
 
       console.log(`Cluster ${clusterIndex + 1} response (first 300 chars):`, response.substring(0, 300))
 
-      // Extract JSON using multiple strategies
-      const jsonString = this.extractJSON(response)
-
-      // Parse JSON
-      const parsed = JSON.parse(jsonString)
+      // Try to parse the content as JSON directly first
+      let parsed: any;
+      try {
+        parsed = JSON.parse(response)
+      } catch (parseError) {
+        console.log('[Agent] JSON parse failed, trying extractor:', parseError)
+        const jsonString = this.extractJSON(response)
+        parsed = JSON.parse(jsonString)
+      }
 
       // Validate with Zod
+      console.log(`[Agent] Validating parsed JSON with schema...`)
       const validatedReport = VulnerabilityReportSchema.parse(parsed)
+      
+      // Add IDs if missing
+      const processedVulnerabilities = validatedReport.vulnerabilities.map(v => ({
+        ...v,
+        id: v.id || Math.random().toString(36).substring(7),
+        type: v.type || 'Security Vulnerability',
+        location: v.location || 'Unknown'
+      })) as Vulnerability[]
 
-      // Add generated timestamp
+      // Calculate statistics
+      const stats = {
+        total: processedVulnerabilities.length,
+        critical: processedVulnerabilities.filter(v => v.severity === 'critical').length,
+        high: processedVulnerabilities.filter(v => v.severity === 'high').length,
+        medium: processedVulnerabilities.filter(v => v.severity === 'medium').length,
+        low: processedVulnerabilities.filter(v => v.severity === 'low').length
+      }
+
       const report: VulnerabilityReport = {
-        ...validatedReport,
+        summary: validatedReport.summary || `Found ${stats.total} potential vulnerabilities.`,
+        vulnerabilities: processedVulnerabilities,
+        statistics: stats,
         generatedAt: new Date().toISOString()
       }
 
       return report
-    } catch (error) {
+    } catch (error: any) {
+      // Handle Rate Limit (429) gracefully
+      if (error?.status === 429 || error?.code === 'rate_limit_exceeded' || error?.message?.includes('rate limit')) {
+        console.warn(`[Agent] Rate limit exceeded in cluster ${clusterIndex + 1}. Returning partial result.`)
+        return {
+          summary: 'Analysis paused: Rate limit reached.',
+          vulnerabilities: [{
+            id: 'rate_limit_exceeded',
+            title: 'Analysis Paused: API Rate Limit Reached',
+            severity: 'info',
+            description: `The AI analysis service daily limit has been reached (Requested: ${error?.error?.message || 'unknown'}). Analysis for this batch could not complete.`,
+            type: 'System Limitation',
+            location: 'System',
+            recommendation: 'Please wait for your quota to reset (usually 24h) or upgrade your plan. You can also try reducing the number of pages scanned.',
+            affectedAssets: []
+          }],
+          statistics: {
+            total: 1,
+            critical: 0,
+            high: 0,
+            medium: 0,
+            low: 0
+          },
+          generatedAt: new Date().toISOString()
+        }
+      }
+
       if (error instanceof z.ZodError) {
-        console.error(`Cluster ${clusterIndex + 1} Zod validation error:`, JSON.stringify(error.errors, null, 2))
-        throw new Error(`Invalid response format from AI in cluster ${clusterIndex + 1}: ${error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
+        // Zod v3 uses .issues, newer might use .errors. Use any for safety.
+        const issues = (error as any).issues || (error as any).errors || []
+        console.error(`Cluster ${clusterIndex + 1} Zod validation error:`, JSON.stringify(issues, null, 2))
+        throw new Error(`Invalid response format from AI in cluster ${clusterIndex + 1}: ${issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
       }
       if (error instanceof SyntaxError) {
         console.error(`Cluster ${clusterIndex + 1} JSON parse error:`, error.message)
@@ -506,20 +586,21 @@ Do NOT include any text outside the tags. Do NOT use markdown code blocks.`
     crawledData: CrawledDataSummary,
     targetUrl: string
   ): Promise<FullReport> {
-    const prompt = this.buildFullReportPrompt(
-      selectedVulnerabilities,
-      crawledData,
-      targetUrl
-    )
+    const generate = async (vulnerabilities: Vulnerability[], allowFallback: boolean): Promise<FullReport> => {
+      const prompt = this.buildFullReportPrompt(
+        vulnerabilities,
+        crawledData,
+        targetUrl
+      )
 
-    try {
-      const message = await this.client.chat.completions.create({
-        model: this.model,
-        messages: [
-          {
-            role: 'system',
-            content: `You are a professional penetration tester writing formal security reports. You MUST respond with ONLY valid JSON wrapped in <report> tags.
-
+      try {
+        const message = await this.client.chat.completions.create({
+          model: this.model,
+          messages: [
+            {
+              role: 'system',
+              content: `You are a professional penetration tester writing formal security reports. You MUST respond with ONLY valid JSON wrapped in <report> tags.
+              
 CRITICAL OUTPUT FORMAT:
 <report>
 {
@@ -547,68 +628,51 @@ CRITICAL OUTPUT FORMAT:
   "methodology": "Testing methodology description...",
   "recommendations": [
     "Priority 1: Critical fixes...",
-    "Priority 2: High priority..."
-  ]
+    "Priority 2: Defense in depth..."
+  ],
+  "generatedAt": "ISO date string"
 }
-</report>
-
-Do NOT include any text outside the tags. Do NOT use markdown code blocks.`
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.4,
-        max_tokens: 10000
-      })
-
-      const response = message.choices[0]?.message?.content
-      if (!response) {
-        throw new Error('Empty response from Groq API')
+</report>`
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.2,
+          max_tokens: 8000
+        })
+        
+        const content = message.choices[0]?.message?.content || ''
+        const jsonMatch = content.match(/<report>([\s\S]*?)<\/report>/) || content.match(/\{[\s\S]*\}/)
+        
+        if (!jsonMatch) {
+          throw new Error('Invalid response format')
+        }
+        
+        return JSON.parse(jsonMatch[1] || jsonMatch[0])
+      } catch (error: any) {
+        // Handle Rate Limit (413 or 429) by truncating data
+        if (allowFallback && (error?.status === 413 || error?.code === 'rate_limit_exceeded')) {
+          console.warn('[Agent] Rate limit exceeded, retrying with truncated payload...')
+          // Take only top 5 vulnerabilities by severity
+          const topVulns = vulnerabilities
+            .sort((a, b) => {
+              const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 }
+              return severityOrder[a.severity] - severityOrder[b.severity]
+            })
+            .slice(0, 5)
+            
+          return generate(topVulns, false)
+        }
+        throw error
       }
-
-      console.log('AI Report Response (first 500 chars):', response.substring(0, 500))
-
-      // Extract JSON - look for <report> tags first
-      let jsonString: string
-      const reportMatch = response.match(/<report>([\s\S]*?)<\/report>/i)
-      if (reportMatch) {
-        jsonString = reportMatch[1].trim()
-      } else {
-        jsonString = this.extractJSON(response)
-      }
-
-      console.log('Extracted Report JSON (first 500 chars):', jsonString.substring(0, 500))
-
-      // Parse JSON
-      const parsed = JSON.parse(jsonString)
-
-      // Validate with Zod
-      const validatedReport = FullReportSchema.parse(parsed)
-
-      // Add generated timestamp
-      const report: FullReport = {
-        ...validatedReport,
-        generatedAt: new Date().toISOString()
-      }
-
-      return report
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        console.error('Zod validation error:', JSON.stringify(error.errors, null, 2))
-        throw new Error(`Invalid report format from AI: ${error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
-      }
-      if (error instanceof SyntaxError) {
-        console.error('JSON parse error:', error.message)
-        throw new Error(`Failed to parse JSON from AI report: ${error.message}`)
-      }
-      console.error('Groq API error:', error)
-      throw new Error(
-        error instanceof Error ? error.message : 'Failed to generate report'
-      )
     }
+
+    return generate(selectedVulnerabilities, true)
   }
+
+
 
 
   /**
@@ -623,6 +687,32 @@ Do NOT include any text outside the tags. Do NOT use markdown code blocks.`
       ? `\n(This is cluster ${clusterIndex + 1} of ${totalClusters} - analyzing a subset of discovered data)\n` 
       : ''
 
+    // Create lightweight summaries to save tokens
+    const summarizedCrawl = data.crawlResults.map(r => ({
+      url: r.url,
+      status: r.status,
+      title: r.title || '',
+      forms: r.forms?.map(f => ({ 
+        action: f.action || '',
+        method: f.method || '',
+        inputs: (f.fields || []).map(i => i.name).join(', ') 
+      })) || [],
+      linkCount: r.links?.length || 0
+    }))
+
+    const summarizedApi = data.allApiCalls.map(c => ({
+      endpoint: c.endpoint,
+      method: c.method,
+      responseStatus: c.responseStatus
+    }))
+
+    // Limit context data
+    const summarizedAssets = {
+      js: (data.allAssets?.['js'] || []).slice(0, 50),
+      css: (data.allAssets?.['css'] || []).slice(0, 20),
+      images: (data.allAssets?.['images'] || []).length + ' images found'
+    }
+
     return `You are a professional penetration tester and security analyst. Analyze the following web application crawl data and identify security vulnerabilities.${clusterInfo}
 CRAWLED DATA SUMMARY:
 - URLs in this batch: ${data.crawlResults.length}
@@ -631,29 +721,27 @@ CRAWLED DATA SUMMARY:
 - Cookies analyzed: ${data.allCookies.length}
 - Emails discovered: ${data.allEmails.length}
 - Unique domains: ${data.discoveredDomains.length}
-- Assets discovered: ${Object.values(data.allAssets).reduce((sum, arr) => sum + arr.length, 0)}
-${data.fuzzResults ? `- Fuzz results: ${data.fuzzResults.length}` : ''}
 
-DETAILED DATA - PAGES & FORMS:
-${JSON.stringify(data.crawlResults, null, 2)}
+DETAILED DATA - PAGES & FORMS (Summarized):
+${JSON.stringify(summarizedCrawl, null, 2)}
 
-DETAILED DATA - API ENDPOINTS:
-${JSON.stringify(data.allApiCalls, null, 2)}
+DETAILED DATA - API ENDPOINTS (Summarized):
+${JSON.stringify(summarizedApi, null, 2)}
 
 REFERENCE DATA - COOKIES (for context):
 ${JSON.stringify(data.allCookies, null, 2)}
 
 REFERENCE DATA - EMAILS (for context):
-${JSON.stringify(data.allEmails, null, 2)}
+${JSON.stringify(data.allEmails.slice(0, 50), null, 2)}
 
-REFERENCE DATA - ASSETS (for context):
-${JSON.stringify(data.allAssets, null, 2)}
+REFERENCE DATA - ASSETS (for context, truncated):
+${JSON.stringify(summarizedAssets, null, 2)}
 
 REFERENCE DATA - DOMAINS (for context):
-${JSON.stringify(data.discoveredDomains, null, 2)}
+${JSON.stringify(data.discoveredDomains.slice(0, 50), null, 2)}
 
 ${data.fuzzResults ? `REFERENCE DATA - FUZZ RESULTS (for context):
-${JSON.stringify(data.fuzzResults, null, 2)}` : ''}
+${JSON.stringify(data.fuzzResults.slice(0, 20), null, 2)}` : ''}
 
 ANALYSIS INSTRUCTIONS:
 Analyze the pages, forms, and API endpoints in this batch:
@@ -705,6 +793,10 @@ IMPORTANT: Output ONLY JSON in tags. No other text.`
     crawledData: CrawledDataSummary,
     targetUrl: string
   ): string {
+    // Calculate summary statistics to avoid sending full data
+    const formCount = crawledData.crawlResults.reduce((sum, r) => sum + (r.forms?.length || 0), 0)
+    const assetCount = Object.values(crawledData.allAssets || {}).reduce((sum, arr) => sum + arr.length, 0)
+    
     return `You are a professional security consultant writing a formal penetration testing report. Create a comprehensive report based on the following findings.
 
 TARGET: ${targetUrl}
@@ -712,17 +804,14 @@ TARGET: ${targetUrl}
 IDENTIFIED VULNERABILITIES:
 ${JSON.stringify(vulnerabilities, null, 2)}
 
-COMPLETE CRAWL SUMMARY:
+SCAN SUMMARY:
 - URLs scanned: ${crawledData.crawlResults.length}
-- Domains discovered: ${crawledData.discoveredDomains.join(', ')}
-- API endpoints: ${crawledData.allApiCalls.length}
-- Forms found: ${crawledData.crawlResults.reduce((sum, r) => sum + r.forms.length, 0)}
-- Cookies analyzed: ${crawledData.allCookies.length}
-- Emails discovered: ${crawledData.allEmails.length}
-- Assets discovered: ${Object.values(crawledData.allAssets).reduce((sum, arr) => sum + arr.length, 0)}
-
-ALL CRAWLED DATA FOR CONTEXT:
-${JSON.stringify(crawledData, null, 2)}
+- Domains discovered: ${crawledData.discoveredDomains.length}
+- API endpoints found: ${crawledData.allApiCalls.length}
+- Forms analyzed: ${formCount}
+- Cookies examined: ${crawledData.allCookies.length}
+- Email addresses found: ${crawledData.allEmails.length}
+- Assets discovered: ${assetCount}
 
 Generate a professional penetration testing report in JSON format:
 
@@ -752,7 +841,7 @@ You MUST wrap your JSON response in <report> tags like this:
     "medium": 1,
     "low": 1
   },
-  "methodology": "Detailed description of testing methodology: automated web crawling using Puppeteer to discover ${crawledData.crawlResults.length} pages, form enumeration (${crawledData.crawlResults.reduce((sum, r) => sum + r.forms.length, 0)} forms), API endpoint discovery (${crawledData.allApiCalls.length} endpoints), cookie security analysis (${crawledData.allCookies.length} cookies), asset enumeration, and directory fuzzing. Include specific tools and techniques used.",
+  "methodology": "Detailed description of testing methodology: automated web crawling to discover ${crawledData.crawlResults.length} pages, form enumeration (${formCount} forms), API endpoint discovery (${crawledData.allApiCalls.length} endpoints), cookie security analysis (${crawledData.allCookies.length} cookies), and asset enumeration. Include specific tools and techniques used.",
   "recommendations": [
     "Priority 1 (Critical): Immediate actions for critical vulnerabilities - [specific actions]",
     "Priority 2 (High): High-priority security improvements - [specific actions]",

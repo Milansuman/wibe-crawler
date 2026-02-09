@@ -25,9 +25,13 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@lucide/svelte": "^0.545.0",
     "@tailwindcss/vite": "^4.1.14",
+    "groq-sdk": "^0.37.0",
+    "jspdf": "^4.1.0",
+    "jspdf-autotable": "^5.0.7",
     "lucide-svelte": "^0.555.0",
     "puppeteer": "^24.23.0",
-    "tailwindcss": "^4.1.14"
+    "tailwindcss": "^4.1.14",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

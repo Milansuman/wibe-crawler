@@ -30,6 +30,11 @@ interface FuzzerAPI {
   removeAllListeners: () => void
 }
 
+interface AnalyzerAPI {
+  analyzeVulnerabilities: (data: any) => Promise<any>
+  generateReport: (data: any) => Promise<any>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -37,6 +42,7 @@ declare global {
       windowControls: WindowControls
       crawler: CrawlerAPI
       fuzzer: FuzzerAPI
+      analyzer: AnalyzerAPI
     }
   }
 }

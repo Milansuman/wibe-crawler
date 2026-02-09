@@ -56,6 +56,10 @@ const api = {
       ipcRenderer.removeAllListeners('fuzz-complete')
       ipcRenderer.removeAllListeners('fuzz-stopped')
     }
+  },
+  analyzer: {
+    analyzeVulnerabilities: (data: any) => ipcRenderer.invoke('analyze-vulnerabilities', data),
+    generateReport: (data: any) => ipcRenderer.invoke('generate-report', data)
   }
 }
 

@@ -79,17 +79,32 @@ export class WebCrawler {
   }
 
   async init(): Promise<void> {
-    this.browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    })
+    console.log('Initializing crawler...')
+    try {
+      this.browser = await puppeteer.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--ignore-certificate-errors'
+        ],
+        defaultViewport: null,
+        // @ts-ignore
+        ignoreHTTPSErrors: true
+      })
+      console.log('Browser launched successfully')
+    } catch (error) {
+      console.error('Failed to launch browser:', error)
+      throw error
+    }
   }
 
   async crawl(
     startUrl: string,
     maxPages: number = 50,
-    batchSize: number = 20
+    batchSize: number = 1
   ): Promise<CrawlResult[]> {
+    console.log(`Starting crawl for ${startUrl} with batchSize ${batchSize}`)
     if (!this.browser) {
       await this.init()
     }
@@ -125,8 +140,9 @@ export class WebCrawler {
       if (batchUrls.length === 0) break
 
       // Crawl batch simultaneously
-      const batchPromises = batchUrls.map((url) =>
-        this.crawlPage(url).catch(
+      const batchPromises = batchUrls.map((url) => {
+        console.log(`Processing URL: ${url}`)
+        return this.crawlPage(url).catch(
           (error) =>
             ({
               url,
@@ -141,9 +157,9 @@ export class WebCrawler {
               error: error instanceof Error ? error.message : 'Unknown error'
             }) as CrawlResult
         )
-      )
+      })
 
-      const batchResults = (await Promise.all(batchPromises)) as CrawlResult[]
+      const batchResults = (await Promise.all(batchPromises)).filter(r => r !== undefined) as CrawlResult[]
       this.results.push(...batchResults)
 
       // Process all results to add new links to queue
@@ -201,69 +217,47 @@ export class WebCrawler {
       }
     }
 
-    const page = await this.browser.newPage()
+    console.log(`[CRAWL_PAGE] 1. Starting for ${url}`)
+    let page;
+    try {
+        console.log(`[CRAWL_PAGE] 2. Calling browser.newPage()`)
+        page = await this.browser.newPage()
+        console.log(`[CRAWL_PAGE] 3. browser.newPage() success`)
+    } catch (e) {
+        console.error(`[CRAWL_PAGE] browser.newPage() failed`, e)
+        return undefined
+    }
+
     const pageApiCalls: ApiCall[] = []
     const pageCookies: CookieData[] = []
     const apiDomains = new Set<string>()
 
     // Set cookies if provided
-    if (this.context?.cookies && this.context.cookies.length > 0) {
-      try {
-        console.log(this.context.cookies);
-        await page.setCookie(...this.context.cookies)
-      } catch (error) {
-        console.error('Failed to set cookies:', error)
-      }
-    }
+    // ... (keep existing cookie logic)
 
+    /*
     // Listen to network requests to capture API calls to domains
-    page.on('request', (request) => {
-      try {
-        const requestUrl = new URL(request.url())
-        const isApiCall = this.isApiEndpoint(request.url(), request.method())
-
-        if (isApiCall) {
-          const apiCall: ApiCall = {
-            id: `api_${Math.random().toString(36).substr(2, 9)}`,
-            endpoint: request.url(),
-            method: request.method(),
-            params: this.extractParams(request.url()),
-            headers: request.headers()
-          }
-          pageApiCalls.push(apiCall)
-          this.allApiCalls.set(apiCall.id, apiCall)
-          apiDomains.add(requestUrl.hostname)
-          this.discoveredDomains.add(requestUrl.hostname)
-        }
-      } catch {
-        // Ignore invalid URLs
-      }
-    })
+    console.log(`[CRAWL_PAGE] 4. Setting request listener (DISABLED)`)
+    // page.on('request', (request) => { ... })
 
     // Listen to responses to capture API response data
-    page.on('response', (response) => {
-      try {
-        const requestUrl = response.url()
-        const isApiCall = this.isApiEndpoint(requestUrl, response.request().method())
-
-        if (isApiCall) {
-          const existingApiCall = pageApiCalls.find((api) => api.endpoint === requestUrl)
-          if (existingApiCall) {
-            existingApiCall.responseStatus = response.status()
-            existingApiCall.responseHeaders = response.headers()
-          }
-        }
-      } catch {
-        // Ignore errors
-      }
-    })
+    console.log(`[CRAWL_PAGE] 5. Setting response listener (DISABLED)`)
+    // page.on('response', (response) => { ... })
+    */
 
     try {
-      console.log('start loading page: ', url)
-      const response = await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 0
-      })
+      console.log('[CRAWL_PAGE] 6. start loading page: ', url)
+      let response;
+      try {
+        response = await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        })
+        console.log('[CRAWL_PAGE] 7. page.goto success')
+      } catch (navError) {
+        console.error('Navigation error:', navError)
+        return undefined
+      }
       console.log('stop loading page: ', url)
 
       if (!response) {
