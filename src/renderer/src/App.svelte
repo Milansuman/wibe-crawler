@@ -17,6 +17,7 @@
 
   let isScanning = false
   let isAnalyzing = false
+  let isExporting = false
   let showResults = false
   let selectedCrawledUrl = ''
   let crawledUrls = []
@@ -50,6 +51,56 @@
   $: high = vulnerabilities.filter((v) => v.severity === 'high').length
   $: medium = vulnerabilities.filter((v) => v.severity === 'medium').length
   $: low = vulnerabilities.filter((v) => v.severity === 'low').length
+
+  // Progress calculations
+  let maxScanProgress = 0
+  let scanProgress = 0
+
+  $: {
+    // Calculate current progress
+    const currentProgress =
+      totalUrls > 0 ? Math.min((crawledUrls.length / totalUrls) * 100, 100) : 0
+    // Only update if it's higher than our max (prevents drops when new URLs discovered)
+    if (currentProgress > maxScanProgress) {
+      maxScanProgress = currentProgress
+    }
+    scanProgress = maxScanProgress
+  }
+
+  // Set to 100% when scanning completes
+  $: if (!isScanning && showResults && scanProgress < 100 && crawledUrls.length > 0) {
+    scanProgress = 100
+    maxScanProgress = 100
+  }
+
+  // Reset when starting a new scan
+  $: if (isScanning && crawledUrls.length === 0) {
+    scanProgress = 0
+    maxScanProgress = 0
+  }
+
+  // Simulated analysis progress (since AI analysis is a single operation)
+  let analysisProgress = 0
+  let analysisInterval = null
+
+  $: if (isAnalyzing && !analysisInterval) {
+    // Don't reset if we're already at a high percentage
+    if (analysisProgress < 10) {
+      analysisProgress = 10
+    }
+    analysisInterval = setInterval(() => {
+      if (analysisProgress < 90) {
+        // Only increment, never decrement
+        const increment = Math.random() * 10 + 5
+        analysisProgress = Math.min(analysisProgress + increment, 90)
+      }
+    }, 400)
+  } else if (!isAnalyzing && analysisInterval) {
+    clearInterval(analysisInterval)
+    analysisInterval = null
+    // Set to 100% when complete and keep it there
+    analysisProgress = 100
+  }
 
   onMount(() => {
     if (window.api?.crawler) {
@@ -157,6 +208,7 @@
     if (vulnerabilities.length === 0 && fullCrawlResults.length === 0) return
 
     try {
+      isExporting = true
       crawlStatus = 'Generating detailed report...'
       const response = await window.api.analyzer.generateReport({
         vulnerabilities: vulnerabilities.map((v) => ({
@@ -210,6 +262,8 @@
     } catch (error) {
       console.error('Report generation failed:', error)
       crawlStatus = `Report generation failed: ${error.message}`
+    } finally {
+      isExporting = false
     }
   }
 
@@ -343,6 +397,8 @@
     {high}
     {medium}
     {low}
+    {scanProgress}
+    {analysisProgress}
     onStartScan={startScan}
     onStopScan={stopScan}
     onAnalyze={analyzeVulnerabilities}
@@ -367,6 +423,27 @@
             emailsCount={allEmails.length}
             onTabChange={handleTabChange}
           />
+
+          <!-- Rate Limit Warning Banner -->
+          {#if vulnerabilities.some((v) => v.id === 'rate_limit_exceeded')}
+            {@const rateLimitVuln = vulnerabilities.find((v) => v.id === 'rate_limit_exceeded')}
+            <div
+              class="mt-3 mb-4 p-4 bg-yellow-950/30 border-l-4 border-yellow-500 border border-yellow-900/50 flex items-start gap-3"
+            >
+              <div class="text-2xl shrink-0">⚠️</div>
+              <div class="flex-1 min-w-0">
+                <h3 class="text-sm font-semibold text-yellow-300 mb-1">
+                  {rateLimitVuln.name}
+                </h3>
+                <p class="text-xs text-yellow-200/80 leading-relaxed mb-2">
+                  {rateLimitVuln.description}
+                </p>
+                <p class="text-xs text-yellow-400/60">
+                  💡 {rateLimitVuln.recommendation}
+                </p>
+              </div>
+            </div>
+          {/if}
 
           <!-- Tab Content -->
           <div class="flex-1 overflow-y-auto">
@@ -402,6 +479,7 @@
     {#if reportItems.length > 0}
       <ReportSidebar
         {reportItems}
+        {isExporting}
         onRemoveFromReport={removeFromReport}
         onExportReport={exportReport}
       />

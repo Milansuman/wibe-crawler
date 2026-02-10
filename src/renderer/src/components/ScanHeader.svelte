@@ -11,6 +11,8 @@
   export let onStopScan
   export let onAnalyze
   export let isAnalyzing = false
+  export let scanProgress = 0
+  export let analysisProgress = 0
 
   let selectedUrl = 'https://'
   let mirrorEl
@@ -115,9 +117,44 @@
       </div>
     {/if}
   </div>
+
+  <!-- Status Message with Loading Bar -->
   {#if isScanning && crawlStatus}
-    <div class="mb-2 text-xs text-gray-400">{crawlStatus}</div>
+    <div class="mb-2">
+      <div class="text-xs text-gray-400 flex items-center gap-1 mb-1.5">
+        <span>{crawlStatus.replace(/\.\.\.$/, '')}</span>
+        <span class="loading-dots inline-flex">
+          <span>.</span><span>.</span><span>.</span>
+        </span>
+        <span class="ml-auto font-mono text-blue-400">{Math.round(scanProgress)}%</span>
+      </div>
+      <div class="w-full h-1 bg-gray-800 overflow-hidden">
+        <div
+          class="h-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-300"
+          style="width: {scanProgress}%"
+        ></div>
+      </div>
+    </div>
   {/if}
+
+  {#if isAnalyzing}
+    <div class="mb-2">
+      <div class="text-xs text-purple-400 flex items-center gap-1 mb-1.5">
+        <span>Analyzing with AI</span>
+        <span class="loading-dots inline-flex">
+          <span>.</span><span>.</span><span>.</span>
+        </span>
+        <span class="ml-auto font-mono">{Math.round(analysisProgress)}%</span>
+      </div>
+      <div class="w-full h-1 bg-gray-800 overflow-hidden">
+        <div
+          class="h-full bg-gradient-to-r from-purple-600 to-purple-400 transition-all duration-300"
+          style="width: {analysisProgress}%"
+        ></div>
+      </div>
+    </div>
+  {/if}
+
   <div class="flex gap-2">
     <div class="relative flex-1">
       <span bind:this={mirrorEl} class="invisible absolute top-0 left-3 text-xs whitespace-pre"
@@ -147,7 +184,15 @@
       disabled={isScanning || isAnalyzing || !selectedUrl}
       class="border border-gray-700 hover:border-gray-500 disabled:border-gray-800 disabled:text-gray-600 px-4 py-2 text-xs"
     >
-      {isScanning ? 'Scanning...' : 'Scan'}
+      {#if isScanning}
+        <span class="inline-flex items-center gap-1">
+          Scanning<span class="loading-dots inline-flex"
+            ><span>.</span><span>.</span><span>.</span></span
+          >
+        </span>
+      {:else}
+        Scan
+      {/if}
     </button>
     {#if showResults && !isScanning}
       <button
@@ -155,7 +200,15 @@
         disabled={isAnalyzing}
         class="border border-purple-700 text-purple-300 hover:border-purple-500 hover:text-purple-200 disabled:border-gray-800 disabled:text-gray-600 px-4 py-2 text-xs"
       >
-        {isAnalyzing ? 'Analyzing...' : 'Analyze'}
+        {#if isAnalyzing}
+          <span class="inline-flex items-center gap-1">
+            Analyzing<span class="loading-dots inline-flex"
+              ><span>.</span><span>.</span><span>.</span></span
+            >
+          </span>
+        {:else}
+          Analyze
+        {/if}
       </button>
     {/if}
     {#if isScanning}
@@ -202,3 +255,34 @@
     </div>
   {/if}
 </div>
+
+<style>
+  @keyframes dotPulse {
+    0%,
+    20% {
+      opacity: 0.2;
+    }
+    50% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0.2;
+    }
+  }
+
+  .loading-dots span {
+    animation: dotPulse 1.4s infinite;
+  }
+
+  .loading-dots span:nth-child(1) {
+    animation-delay: 0s;
+  }
+
+  .loading-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .loading-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+</style>

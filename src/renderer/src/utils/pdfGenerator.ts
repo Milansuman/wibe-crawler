@@ -50,6 +50,40 @@ export function generateVulnerabilityPDF(
   const pageHeight = doc.internal.pageSize.getHeight()
   const margin = 20
   let yPos = margin
+  const watermarkedPages = new Set<number>()
+
+  // Helper function to add watermark (must be called early so it appears behind content)
+  const addWatermark = () => {
+    const pageNum = (doc as any).internal.getCurrentPageInfo().pageNumber
+    if (watermarkedPages.has(pageNum)) return
+    watermarkedPages.add(pageNum)
+
+    // Add diagonal watermark centered on page
+    doc.saveGraphicsState()
+    
+    // Set semi-transparent gray for visibility
+    doc.setTextColor(245, 245, 245)
+    doc.setFontSize(80)
+    doc.setFont('helvetica', 'bold')
+    
+    // Trig calculations for perfect centering
+    // Text rotates around baseline. We need to shift pivot point to match visual center.
+    // Visual center is approx 1/3 font size "above" baseline.
+    // Rotated 45 degrees, "above" is Top-Right (NE).
+    // To center, we must shift the pivot Down-Left (SW).
+    // Offset amount: ~7.5mm (approx 1/3 of 60pt/21mm height)
+    // const offset = 5.3 // 7.5 * sin(45)
+    
+    // User requested manual adjustment: "move some right and down"
+    const centerX = pageWidth / 2 + 30
+    const centerY = pageHeight / 2 + 45
+    
+    doc.text('Wibe Crawler', centerX, centerY, {
+      align: 'center',
+      angle: 45
+    })
+    doc.restoreGraphicsState()
+  }
 
   // Helper function to add page numbers
   const addPageNumber = () => {
@@ -71,6 +105,7 @@ export function generateVulnerabilityPDF(
   const checkPageBreak = (requiredSpace: number) => {
     if (yPos + requiredSpace > pageHeight - margin) {
       doc.addPage()
+      addWatermark() // Add watermark to new page
       yPos = margin
       return true
     }
@@ -78,27 +113,37 @@ export function generateVulnerabilityPDF(
   }
 
   // Title Page
+  // Add watermark first so it appears behind content
+  addWatermark()
+  
   doc.setFillColor(30, 41, 59) // Slate 800
-  doc.rect(0, 0, pageWidth, 80, 'F')
+  doc.rect(0, 0, pageWidth, 90, 'F')
+
+  // WIBE CRAWLER branding
+  doc.setTextColor(100, 200, 255) // Light blue
+  doc.setFontSize(32)
+  doc.setFont('helvetica', 'bold')
+  doc.text('WIBE CRAWLER', pageWidth / 2, 25, { align: 'center' })
 
   doc.setTextColor(255, 255, 255)
-  doc.setFontSize(28)
+  doc.setFontSize(24)
   doc.setFont('helvetica', 'bold')
-  doc.text('Security Assessment Report', pageWidth / 2, 35, { align: 'center' })
+  doc.text('Security Assessment Report', pageWidth / 2, 45, { align: 'center' })
 
-  doc.setFontSize(14)
+  doc.setFontSize(12)
   doc.setFont('helvetica', 'normal')
-  doc.text(scanData.targetUrl, pageWidth / 2, 50, { align: 'center' })
+  doc.text(scanData.targetUrl, pageWidth / 2, 60, { align: 'center' })
 
-  doc.setFontSize(10)
+  doc.setFontSize(9)
+  doc.setTextColor(200, 200, 200)
   doc.text(
     `Generated on ${scanData.scannedAt.toLocaleDateString()} at ${scanData.scannedAt.toLocaleTimeString()}`,
     pageWidth / 2,
-    60,
+    72,
     { align: 'center' }
   )
 
-  yPos = 100
+  yPos = 110
 
   // Executive Summary Section
   doc.setTextColor(0, 0, 0)
@@ -154,7 +199,8 @@ export function generateVulnerabilityPDF(
     theme: 'grid',
     headStyles: { fillColor: [30, 41, 59], textColor: 255 },
     margin: { left: margin, right: margin },
-    styles: { fontSize: 10 }
+    styles: { fontSize: 10 },
+    willDrawPage: () => addWatermark()
   })
 
   yPos = (doc as any).lastAutoTable.finalY + 15
@@ -181,13 +227,15 @@ export function generateVulnerabilityPDF(
     columnStyles: {
       0: { fontStyle: 'bold', cellWidth: 50 },
       1: { cellWidth: 'auto' }
-    }
+    },
+    willDrawPage: () => addWatermark()
   })
 
   yPos = (doc as any).lastAutoTable.finalY + 20
 
   // Vulnerabilities Section
   doc.addPage()
+  addWatermark() // Add watermark to new page
   yPos = margin
 
   doc.setFontSize(18)
@@ -285,6 +333,7 @@ export function generateVulnerabilityPDF(
   // Recommendations Section
   if (reportData.recommendations && reportData.recommendations.length > 0) {
     doc.addPage()
+    addWatermark() // Add watermark to new page
     yPos = margin
 
     doc.setFontSize(18)
@@ -308,6 +357,6 @@ export function generateVulnerabilityPDF(
   addPageNumber()
 
   // Save the PDF
-  const fileName = `vulnerability-report-${scanData.targetUrl.replace(/[^a-z0-9]/gi, '-')}-${Date.now()}.pdf`
+  const fileName = `Wibe-Crawler-Vulnerability-Report-${scanData.targetUrl.replace(/[^a-z0-9]/gi, '-')}-${Date.now()}.pdf`
   doc.save(fileName)
 }

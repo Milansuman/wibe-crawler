@@ -4,6 +4,9 @@
 
   let viewMode: 'list' | 'grid' = 'list'
 
+  // Filter out rate limit messages since they're shown in the banner
+  $: filteredVulnerabilities = vulnerabilities.filter((v) => v.id !== 'rate_limit_exceeded')
+
   function getSeverityColor(severity) {
     switch (severity) {
       case 'critical':
@@ -44,38 +47,56 @@
     <div class="flex items-center gap-3">
       <h2 class="text-sm font-medium text-white flex items-center gap-2">
         Vulnerabilities
-        <span class="px-2 py-0.5 rounded-full bg-gray-800 text-gray-400 text-xs font-mono"
-          >{vulnerabilities.length}</span
+        <span class="px-2 py-0.5 bg-gray-800 text-gray-400 text-xs font-mono"
+          >{filteredVulnerabilities.length}</span
         >
       </h2>
     </div>
 
-    <div class="flex bg-gray-900 rounded-lg p-1 border border-gray-800">
-      <button
-        class="px-3 py-1 text-xs font-medium rounded-md transition-all {viewMode === 'list'
-          ? 'bg-gray-700 text-white shadow-sm'
-          : 'text-gray-400 hover:text-gray-300'}"
-        on:click={() => (viewMode = 'list')}
-      >
-        List
-      </button>
-      <button
-        class="px-3 py-1 text-xs font-medium rounded-md transition-all {viewMode === 'grid'
-          ? 'bg-gray-700 text-white shadow-sm'
-          : 'text-gray-400 hover:text-gray-300'}"
-        on:click={() => (viewMode = 'grid')}
-      >
-        Grid
-      </button>
+    <div class="flex items-center gap-2">
+      {#if filteredVulnerabilities.length > 0}
+        <button
+          on:click={() => filteredVulnerabilities.forEach((v) => onAddToReport(v))}
+          class="px-3 py-1 text-xs font-medium text-blue-400 bg-blue-950/30 hover:bg-blue-950/50 border border-blue-900/50 hover:border-blue-800 transition-all"
+        >
+          + Add All to Report
+        </button>
+      {/if}
+
+      <div class="flex bg-gray-900 p-1 border border-gray-800">
+        <button
+          class="px-3 py-1 text-xs font-medium transition-all {viewMode === 'list'
+            ? 'bg-gray-700 text-white shadow-sm'
+            : 'text-gray-400 hover:text-gray-300'}"
+          on:click={() => (viewMode = 'list')}
+        >
+          List
+        </button>
+        <button
+          class="px-3 py-1 text-xs font-medium transition-all {viewMode === 'grid'
+            ? 'bg-gray-700 text-white shadow-sm'
+            : 'text-gray-400 hover:text-gray-300'}"
+          on:click={() => (viewMode = 'grid')}
+        >
+          Grid
+        </button>
+      </div>
     </div>
   </div>
 
   <div class="flex-1 overflow-y-auto pr-2 pb-10">
-    {#if viewMode === 'list'}
+    {#if filteredVulnerabilities.length === 0}
+      <!-- Empty State - Prompt to Analyze -->
+      <div class="flex flex-col items-center justify-center h-full text-center px-4 py-12">
+        <p class="text-sm text-gray-400">
+          Click <span class="text-purple-400 font-medium">Analyze</span> to scan for vulnerabilities
+        </p>
+      </div>
+    {:else if viewMode === 'list'}
       <div class="flex flex-col gap-2">
-        {#each vulnerabilities as vuln}
+        {#each filteredVulnerabilities as vuln}
           <div
-            class="group relative flex flex-col sm:flex-row gap-3 p-3 rounded-lg border border-gray-800 bg-gray-900/40 hover:bg-gray-900/80 hover:border-gray-700 transition-all"
+            class="group relative flex flex-col sm:flex-row gap-3 p-3 border border-gray-800 bg-gray-900/40 hover:bg-gray-900/80 hover:border-gray-700 transition-all"
           >
             <div class="flex-1 min-w-0">
               <div class="flex items-start justify-between gap-4 mb-1">
@@ -85,7 +106,7 @@
                   {vuln.name}
                 </h3>
                 <span
-                  class="shrink-0 text-[10px] font-mono uppercase px-2 py-0.5 rounded border {getSeverityBadgeColor(
+                  class="shrink-0 text-[10px] font-mono uppercase px-2 py-0.5 border {getSeverityBadgeColor(
                     vuln.severity
                   )}"
                 >
@@ -113,7 +134,7 @@
             >
               <button
                 on:click={() => onAddToReport(vuln)}
-                class="w-full sm:w-auto px-3 py-1.5 text-xs font-medium text-blue-400 bg-blue-950/30 hover:bg-blue-950/50 border border-blue-900/50 hover:border-blue-800 rounded transition-all whitespace-nowrap"
+                class="w-full sm:w-auto px-3 py-1.5 text-xs font-medium text-blue-400 bg-blue-950/30 hover:bg-blue-950/50 border border-blue-900/50 hover:border-blue-800 transition-all whitespace-nowrap"
               >
                 Add to Report
               </button>
@@ -123,15 +144,15 @@
       </div>
     {:else}
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-        {#each vulnerabilities as vuln}
+        {#each filteredVulnerabilities as vuln}
           <div
-            class="flex flex-col p-4 rounded-xl border transition-all hover:-translate-y-0.5 hover:shadow-lg duration-200 {getSeverityColor(
+            class="flex flex-col p-4 border transition-all hover:-translate-y-0.5 hover:shadow-lg duration-200 {getSeverityColor(
               vuln.severity
             )}"
           >
             <div class="flex justify-between items-start gap-2 mb-3">
               <span
-                class="shrink-0 text-[10px] font-bold font-mono uppercase tracking-wider px-2 py-1 rounded border {getSeverityBadgeColor(
+                class="shrink-0 text-[10px] font-bold font-mono uppercase tracking-wider px-2 py-1 border {getSeverityBadgeColor(
                   vuln.severity
                 )}"
               >
