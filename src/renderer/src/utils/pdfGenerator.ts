@@ -3,11 +3,21 @@ import autoTable from 'jspdf-autotable'
 
 interface Vulnerability {
   id: string
-  name: string
+  title: string  // Changed from 'name' to match backend schema
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
+  cwe?: string
+  cvss?: number
   description: string
   recommendation: string
   affectedAssets: string[]
+  references?: string[]
+  proof?: {
+    payload?: string
+    parameter?: string
+    request?: string
+    response?: string
+    confidence?: 'High' | 'Medium' | 'Low'
+  }
 }
 
 interface ReportData {
@@ -249,13 +259,21 @@ export function generateVulnerabilityPDF(
     (a, b) => severityOrder[a.severity] - severityOrder[b.severity]
   )
 
+  // DEBUG: Log vulnerability data to verify metadata is present
+  console.log('[PDF] Generating PDF with vulnerabilities:', sortedVulns.map(v => ({
+    title: v.title,
+    cwe: v.cwe,
+    cvss: v.cvss,
+    hasReferences: !!v.references?.length
+  })))
+
   sortedVulns.forEach((vuln, index) => {
     checkPageBreak(80)
 
     // Vulnerability header
     doc.setFontSize(12)
     doc.setFont('helvetica', 'bold')
-    doc.text(`${index + 1}. ${vuln.name}`, margin, yPos)
+    doc.text(`${index + 1}. ${vuln.title}`, margin, yPos)
     yPos += 7
 
     // Severity badge
@@ -271,9 +289,44 @@ export function generateVulnerabilityPDF(
     doc.setFillColor(color[0], color[1], color[2])
     doc.setTextColor(255, 255, 255)
     doc.setFontSize(9)
-    doc.rect(margin, yPos - 4, 25, 6, 'F')
-    doc.text(vuln.severity.toUpperCase(), margin + 12.5, yPos, { align: 'center' })
+    doc.rect(margin, yPos - 4, 30, 6, 'F')
+    doc.text(vuln.severity.toUpperCase(), margin + 15, yPos, { align: 'center' })
+    
+    // CWE & CVSS Badges (if available) - Visual Only
+    let badgeX = margin + 35
+    
+    if (vuln.cvss) {
+        // CVSS Badge
+        const cvssColor = getCvssColor(vuln.cvss)
+        doc.setFillColor(cvssColor[0], cvssColor[1], cvssColor[2])
+        doc.rect(badgeX, yPos - 4, 25, 6, 'F')
+        doc.setTextColor(255, 255, 255)
+        doc.text(`CVSS: ${vuln.cvss}`, badgeX + 12.5, yPos, { align: 'center' })
+        badgeX += 30
+    }
+
+    if (vuln.cwe) {
+        // CWE Badge
+        doc.setFillColor(107, 114, 128) // Gray
+        doc.rect(badgeX, yPos - 4, 35, 6, 'F')
+        doc.setTextColor(255, 255, 255)
+        doc.text(vuln.cwe, badgeX + 17.5, yPos, { align: 'center' })
+    }
+
     yPos += 8
+
+    // Metadata Text Line (Searchable/Copyable)
+    if (vuln.cwe || vuln.cvss) {
+        doc.setTextColor(100) // Dark Gray
+        doc.setFontSize(9)
+        const parts = []
+        if (vuln.cwe) parts.push(`Classification: ${vuln.cwe}`)
+        if (vuln.cvss) parts.push(`Severity Score: ${vuln.cvss} (CVSS 3.1)`)
+        
+        doc.text(parts.join('  |  '), margin, yPos)
+        yPos += 6
+        doc.setTextColor(0) // Reset
+    }
 
     // Description
     doc.setTextColor(0, 0, 0)
@@ -296,21 +349,100 @@ export function generateVulnerabilityPDF(
 
       doc.setFont('helvetica', 'normal')
       doc.setFontSize(9)
-      vuln.affectedAssets.slice(0, 5).forEach(asset => {
-        if (checkPageBreak(6)) yPos += 5
-        doc.text(`• ${asset}`, margin + 5, yPos)
-        yPos += 5
+      
+      // Show ALL affected assets (no limit)
+      vuln.affectedAssets.forEach(asset => {
+        // Check if we need a new page for this item
+        if (checkPageBreak(7)) {
+            yPos = 20 // Reset Y position on new page
+            doc.setFont('helvetica', 'normal')
+            doc.setFontSize(9)
+        }
+        
+        // Handle long URLs by splitting them
+        const assetLines = doc.splitTextToSize(`• ${asset}`, pageWidth - 2 * margin - 10)
+        doc.text(assetLines, margin + 5, yPos)
+        yPos += assetLines.length * 4 + 2
       })
       
-      if (vuln.affectedAssets.length > 5) {
-        doc.setTextColor(100)
-        doc.text(`  ... and ${vuln.affectedAssets.length - 5} more`, margin + 5, yPos)
-        yPos += 5
-        doc.setTextColor(0)
-      }
+      doc.setTextColor(0)
       
       doc.setFontSize(10)
       yPos += 3
+    }
+
+    // Evidence / Proof
+    if (vuln.proof) {
+      checkPageBreak(40)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Proof of Vulnerability:', margin, yPos)
+      yPos += 5
+      
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      
+      if (vuln.proof.confidence) {
+        doc.text(`Confidence: ${vuln.proof.confidence}`, margin + 5, yPos)
+        yPos += 5
+      }
+      
+      if (vuln.proof.parameter) {
+        doc.text(`Vulnerable Parameter: ${vuln.proof.parameter}`, margin + 5, yPos)
+        yPos += 5
+      }
+      
+      if (vuln.proof.payload) {
+        doc.text(`Payload Used:`, margin + 5, yPos)
+        yPos += 5
+        doc.setFont('courier', 'normal')
+        doc.setTextColor(50)
+        doc.text(vuln.proof.payload, margin + 10, yPos)
+        yPos += 5
+        doc.setFont('helvetica', 'normal')
+        doc.setTextColor(0)
+      }
+      
+      if (vuln.proof.request) {
+        checkPageBreak(30)
+        doc.text(`Request Snippet:`, margin + 5, yPos)
+        yPos += 5
+        doc.setFont('courier', 'normal')
+        doc.setFontSize(8)
+        doc.setFillColor(245, 245, 245)
+        
+        const reqLines = doc.splitTextToSize(vuln.proof.request, pageWidth - 2 * margin - 15)
+        const reqHeight = reqLines.length * 4 + 4
+        
+        if (checkPageBreak(reqHeight)) yPos += 5
+        
+        doc.rect(margin + 5, yPos - 3, pageWidth - 2 * margin - 10, reqHeight, 'F')
+        doc.text(reqLines, margin + 10, yPos)
+        yPos += reqHeight + 5
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(9)
+      }
+
+      if (vuln.proof.response) {
+        checkPageBreak(30)
+        doc.text(`Response Snippet:`, margin + 5, yPos)
+        yPos += 5
+        doc.setFont('courier', 'normal')
+        doc.setFontSize(8)
+        doc.setFillColor(245, 245, 245)
+        
+        const resLines = doc.splitTextToSize(vuln.proof.response, pageWidth - 2 * margin - 15)
+        const resHeight = resLines.length * 4 + 4
+        
+        if (checkPageBreak(resHeight)) yPos += 5
+        
+        doc.rect(margin + 5, yPos - 3, pageWidth - 2 * margin - 10, resHeight, 'F')
+        doc.text(resLines, margin + 10, yPos)
+        yPos += resHeight + 5
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(9)
+      }
+      
+      yPos += 2
     }
 
     // Recommendation
@@ -318,11 +450,31 @@ export function generateVulnerabilityPDF(
     doc.setFont('helvetica', 'bold')
     doc.text('Recommendation:', margin, yPos)
     yPos += 5
-
     doc.setFont('helvetica', 'normal')
     const recLines = doc.splitTextToSize(vuln.recommendation, pageWidth - 2 * margin)
-    doc.text(recLines, margin, yPos)
-    yPos += recLines.length * 5 + 12
+    doc.text(recLines, margin + 5, yPos)
+    yPos += recLines.length * 5 + 5
+
+    // References
+    if (vuln.references && vuln.references.length > 0) {
+        checkPageBreak(20)
+        doc.setFont('helvetica', 'bold')
+        doc.text('References:', margin, yPos)
+        yPos += 5
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(9)
+        doc.setTextColor(0, 0, 238) // Blue link color
+        
+        vuln.references.forEach(ref => {
+            if (checkPageBreak(6)) yPos += 5
+            doc.textWithLink(`• ${ref}`, margin + 5, yPos, { url: ref })
+            yPos += 5
+        })
+        doc.setTextColor(0)
+        doc.setFontSize(10)
+        yPos += 5
+    }
+
 
     // Separator
     doc.setDrawColor(200)
@@ -359,4 +511,11 @@ export function generateVulnerabilityPDF(
   // Save the PDF
   const fileName = `Wibe-Crawler-Vulnerability-Report-${scanData.targetUrl.replace(/[^a-z0-9]/gi, '-')}-${Date.now()}.pdf`
   doc.save(fileName)
+}
+
+function getCvssColor(score: number): [number, number, number] {
+    if (score >= 9.0) return [220, 38, 38] // Critical (Red)
+    if (score >= 7.0) return [249, 115, 22] // High (Orange)
+    if (score >= 4.0) return [234, 179, 8]  // Medium (Yellow)
+    return [59, 130, 246] // Low (Blue)
 }

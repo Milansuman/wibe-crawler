@@ -5,7 +5,13 @@
   let viewMode: 'list' | 'grid' = 'list'
 
   // Filter out rate limit messages since they're shown in the banner
-  $: filteredVulnerabilities = vulnerabilities.filter((v) => v.id !== 'rate_limit_exceeded')
+  $: filteredVulnerabilities = vulnerabilities
+    .filter((v) => v.id !== 'rate_limit_exceeded')
+    .sort((a, b) => {
+      // Sort by severity: critical > high > medium > low > info
+      const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 }
+      return severityOrder[a.severity] - severityOrder[b.severity]
+    })
 
   function getSeverityColor(severity) {
     switch (severity) {

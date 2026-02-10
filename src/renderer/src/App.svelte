@@ -215,6 +215,9 @@
           id: v.id,
           title: v.name, // Map back to title for backend
           severity: v.severity,
+          cwe: v.cwe, // Pass metadata if present
+          cvss: v.cvss,
+          references: v.references,
           description: v.description,
           recommendation: v.recommendation,
           affectedAssets: v.affectedAssets,
@@ -238,12 +241,10 @@
         // Import PDF generator dynamically
         const { generateVulnerabilityPDF } = await import('./utils/pdfGenerator')
 
-        // Generate and download PDF
+        // CRITICAL: Use the enriched vulnerabilities from backend, NOT reportItems
+        // The backend has already enriched the data with CWE/CVSS/References
         generateVulnerabilityPDF(
-          {
-            ...response.report,
-            vulnerabilities: vulnerabilities // Use UI-formatted vulnerabilities
-          },
+          response.report, // Use the FULL enriched report from backend
           {
             targetUrl: scannedBaseUrl,
             scannedAt: new Date(),

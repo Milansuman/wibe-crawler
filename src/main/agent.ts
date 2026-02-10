@@ -13,12 +13,21 @@ import { FuzzResult } from './fuzzer'
 const VulnerabilitySchema = z.object({
   id: z.string().optional(),
   title: z.string(),
-  severity: z.enum(['critical', 'high', 'medium', 'low', 'info']), // Added info
+  severity: z.enum(['critical', 'high', 'medium', 'low', 'info']),
+  cwe: z.string().optional(),
+  cvss: z.number().optional(),
   type: z.string().optional(),
   description: z.string(),
-  location: z.string().optional(),
   recommendation: z.string(),
-  affectedAssets: z.array(z.string())
+  references: z.array(z.string()).optional(),
+  affectedAssets: z.array(z.string()),
+  proof: z.object({
+    payload: z.string().optional(),
+    parameter: z.string().optional(),
+    request: z.string().optional(),
+    response: z.string().optional(),
+    confidence: z.enum(['High', 'Medium', 'Low']).optional()
+  }).optional()
 })
 
 const StatisticsSchema = z.object({
@@ -49,11 +58,21 @@ export interface Vulnerability {
   id: string
   title: string
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
-  type: string
+  cwe?: string
+  cvss?: number
+  type?: string
   description: string
-  location: string
+  location?: string
   recommendation: string
+  references?: string[]
   affectedAssets: string[]
+  proof?: {
+    payload?: string
+    parameter?: string
+    request?: string
+    response?: string
+    confidence?: 'High' | 'Medium' | 'Low'
+  }
 }
 
 export interface VulnerabilityReport {
@@ -176,13 +195,14 @@ export class VulnerabilityAgent {
    * Removes duplicates and limits arrays to most important items
    */
   private filterCrawledData(data: CrawledDataSummary): FilteredCrawledData {
-    const MAX_CRAWL_RESULTS = 30
-    const MAX_API_CALLS = 50
-    const MAX_COOKIES = 30
-    const MAX_EMAILS = 50
-    const MAX_DOMAINS = 50
-    const MAX_FUZZ_RESULTS = 30
-    const MAX_ASSETS_PER_TYPE = 10
+    // Drastically reduced limits to prevent token overflow (was hitting 34k, limit is 12k)
+    const MAX_CRAWL_RESULTS = 5      // Reduced from 30
+    const MAX_API_CALLS = 15         // Reduced from 50  
+    const MAX_COOKIES = 15           // Reduced from 30
+    const MAX_EMAILS = 20            // Reduced from 50
+    const MAX_DOMAINS = 20           // Reduced from 50
+    const MAX_FUZZ_RESULTS = 10      // Reduced from 30
+    const MAX_ASSETS_PER_TYPE = 5    // Reduced from 10
 
     const originalCounts = {
       crawlResults: data.crawlResults.length,
@@ -357,11 +377,97 @@ export class VulnerabilityAgent {
             content: `You are an expert penetration tester and security auditor conducting an authorized security assessment.
             Analyze the provided web crawl data for potential security vulnerabilities.
             
-            IMPORTANT: This is for educational and authorized testing purposes only. You must identify vulnerabilities to help secure the system.
+            CRITICAL: You MUST provide CONCRETE PROOF for each vulnerability. Do NOT use vague language like "may be vulnerable" or "potential".
+            Instead, extract ACTUAL EVIDENCE from the crawl data.
+            
+            ═══════════════════════════════════════════════════════════════
+            STRICT FORMATTING RULES (MUST FOLLOW):
+            ═══════════════════════════════════════════════════════════════
+            
+            1. USE STANDARD NAMING ONLY (NO variations allowed):
+               ✅ "SQL Injection (SQLi)"
+               ✅ "Cross-Site Scripting (XSS)"  
+               ✅ "Insecure Direct Object Reference (IDOR)"
+               ✅ "Missing Security Headers"
+               ✅ "Information Disclosure"
+               ✅ "Authentication Bypass"
+               ❌ NO: "Potential SQL Injection", "SQL Injection Vulnerability", "Possible XSS"
+            
+            2. SEVERITY MAPPING (fixed, non-negotiable):
+               - HIGH: SQL Injection, Stored XSS, Authentication Bypass, Remote Code Execution
+               - MEDIUM: Reflected XSS, IDOR, CSRF, Missing Security Headers
+               - LOW: Information Disclosure (minor), Insecure Cookies, Version Disclosure
+               - INFO: Best practice violations, recommendations
+            
+            3. NO DUPLICATES - If same vulnerability type found multiple times:
+               - Create ONE entry for that type
+               - Combine ALL URLs under "affectedAssets" array
+               Example: If XSS found on 3 pages → ONE "Cross-Site Scripting (XSS)" entry with 3 URLs
+            
+            4. ALWAYS INCLUDE (MANDATORY for every finding):
+               - Parameter name (e.g., "id", "search", "cat", "file")  
+               - Endpoint (e.g., "search.php", "product.php", "/api/user")
+               These MUST appear in the description or proof section
+            
+            5. DESCRIPTION FORMAT:
+               "[Vulnerability Type] found in the '[parameter]' parameter at [endpoint]. [Details]."
+               Example: "SQL Injection found in the 'id' parameter at product.php. Database error messages indicate..."
+            
+            6. DETAILED ANALYSIS REQUIRED:
+               - Description must be at least 2-3 sentences long.
+               - Explain the IMPACT of the vulnerability (what can an attacker do?).
+               - Explain the ROOT CAUSE (why is it happening?).
+               
+            7. METADATA REQUIRED:
+               - CWE ID: Common Weakness Enumeration ID (e.g., "CWE-89")
+               - CVSS Score: Estimated CVSS v3.1 score (e.g., "9.8")
+               - References: Array of 1-2 standard links (OWASP, NIST, PortSwigger)
+            
+            ═══════════════════════════════════════════════════════════════
+            
+            For EACH vulnerability, you MUST include a "proof" object with:
+            - payload: The EXACT test string/input that triggered the issue (from forms, URLs, or API calls)
+            - parameter: The SPECIFIC parameter name that is vulnerable (e.g., "id", "search", "username")
+            - request: A snippet of the actual HTTP request showing the vulnerability (from crawl data)
+            - response: A snippet of the actual HTTP response proving the issue (error messages, reflected input, etc.)
+            - confidence: "High" (confirmed with evidence), "Medium" (strong indicators), or "Low" (theoretical)
+            
+            EXAMPLE of GOOD output (with proof & metadata):
+            {
+              "title": "SQL Injection (SQLi)",
+              "severity": "high",
+              "cwe": "CWE-89",
+              "cvss": 7.5,
+              "description": "SQL Injection found in the 'id' parameter at /user/profile.php. Database error messages indicate unfiltered input. An attacker could use this vulnerability to bypass authentication, access unauthorized data, or modify the database structure. The root cause is the direct concatenation of user input into SQL queries without sanitization.",
+              "recommendation": "Use parameterized queries or prepared statements. Ensure all user input is validated and sanitized before use in database queries.",
+              "references": ["https://owasp.org/www-community/attacks/SQL_Injection", "https://cwe.mitre.org/data/definitions/89.html"],
+              "affectedAssets": ["https://example.com/user/profile.php?id=1", "https://example.com/admin/edit.php?id=5"],
+              "proof": {
+                "payload": "' OR 1=1--",
+                "parameter": "id",
+                "request": "GET /user/profile.php?id=' OR 1=1-- HTTP/1.1",
+                "response": "You have an error in your SQL syntax near '' OR 1=1--'",
+                "confidence": "High"
+              }
+            }
+            
+            EXAMPLE of BAD output (vague, wrong naming, missing meta):
+            {
+              "title": "Potential SQL Injection",  // ❌ Wrong - should be "SQL Injection (SQLi)"
+              "severity": "critical",  // ❌ Wrong - SQLi is "high"
+              "description": "The application may be vulnerable..."  // ❌ Too short, no impact/root cause
+              // ❌ NO CWE, CVSS, References, or Proof
+            }
+            
+            HOW TO EXTRACT PROOF from crawl data:
+            1. Check "forms" array for input fields → use field "name" as parameter
+            2. Check "apiCalls" for request/response data → extract method, URL, status
+            3. Check page content/"html" for error messages or sensitive data exposure
+            4. Look for patterns: SQL errors, XSS reflection, directory listings, exposed credentials
             
             Focus on:
             - OWASP Top 10 vulnerabilities (SQLi, XSS, etc.)
-            - Information Leakage (sensitive paths, patterns)
+            - Information Leakage (sensitive paths, patterns, error messages)
             - Unsafe configurations
             
             Return ONLY a valid JSON object with the following structure:
@@ -370,13 +476,30 @@ export class VulnerabilityAgent {
                 {
                   "title": "string",
                   "severity": "critical" | "high" | "medium" | "low" | "info",
+                  "cwe": "string (e.g. CWE-89)",
+                  "cvss": number,
                   "description": "string",
                   "recommendation": "string",
-                  "affectedAssets": ["url or path"]
+                  "references": ["url1", "url2"],
+                  "affectedAssets": ["url or path"],
+                  "proof": {
+                    "payload": "string (the exact payload used, e.g. <script>alert(1)</script>)",
+                    "parameter": "string (the parameter name, e.g. 'id' or 'q')",
+                    "request": "string (snippet of the HTTP request)",
+                    "response": "string (snippet of the HTTP response showing the issue)",
+                    "confidence": "High" | "Medium" | "Low"
+                  }
                 }
               ],
               "summary": "string"
             }
+            
+            REMINDER: 
+            - NO duplicate vulnerability types (merge them!)
+            - ALWAYS include parameter name and endpoint
+            - ALWAYS include CWE, CVSS, References
+            - Use STANDARD names only
+            - Follow SEVERITY mapping strictly
             
             If no specific vulnerabilities are found, look for potential best-practice violations or information disclosure.`
           },
@@ -410,13 +533,16 @@ export class VulnerabilityAgent {
       console.log(`[Agent] Validating parsed JSON with schema...`)
       const validatedReport = VulnerabilityReportSchema.parse(parsed)
       
-      // Add IDs if missing
-      const processedVulnerabilities = validatedReport.vulnerabilities.map(v => ({
-        ...v,
-        id: v.id || Math.random().toString(36).substring(7),
-        type: v.type || 'Security Vulnerability',
-        location: v.location || 'Unknown'
-      })) as Vulnerability[]
+      // Add IDs if missing and ENRICH with metadata if AI missed it
+      const processedVulnerabilities = validatedReport.vulnerabilities.map(v => {
+        const withId = {
+          ...v,
+          id: v.id || Math.random().toString(36).substring(7),
+          type: v.type || 'Security Vulnerability'
+        } as Vulnerability
+        
+        return this.enrichVulnerability(withId)
+      }) as Vulnerability[]
 
       // Calculate statistics
       const stats = {
@@ -424,7 +550,8 @@ export class VulnerabilityAgent {
         critical: processedVulnerabilities.filter(v => v.severity === 'critical').length,
         high: processedVulnerabilities.filter(v => v.severity === 'high').length,
         medium: processedVulnerabilities.filter(v => v.severity === 'medium').length,
-        low: processedVulnerabilities.filter(v => v.severity === 'low').length
+        low: processedVulnerabilities.filter(v => v.severity === 'low').length,
+        info: processedVulnerabilities.filter(v => v.severity === 'info').length
       }
 
       const report: VulnerabilityReport = {
@@ -494,25 +621,32 @@ export class VulnerabilityAgent {
       return reports[0]
     }
 
-    // Merge vulnerabilities and remove duplicates
+    // Merge vulnerabilities and remove duplicates BY TYPE (title)
+    // This ensures all instances of "SQL Injection (SQLi)" are combined into one entry
     const vulnerabilityMap = new Map<string, Vulnerability>()
 
     for (const report of reports) {
       for (const vuln of report.vulnerabilities) {
-        const key = `${vuln.title}:${vuln.type}:${vuln.location}`
+        // Use ONLY title as the key to deduplicate by vulnerability type
+        const key = vuln.title
         if (!vulnerabilityMap.has(key)) {
           vulnerabilityMap.set(key, vuln)
         } else {
-          // Update affected assets if this is a duplicate
+          // Merge: Combine all affected assets from duplicate entries
           const existing = vulnerabilityMap.get(key)!
           existing.affectedAssets = [...new Set([...existing.affectedAssets, ...vuln.affectedAssets])]
+          
+          // If the new vulnerability has proof and the existing one doesn't, use it
+          if (vuln.proof && !existing.proof) {
+            existing.proof = vuln.proof
+          }
         }
       }
     }
 
-    // Sort by severity
+    // Sort by severity (critical > high > medium > low > info)
     const vulnerabilities = Array.from(vulnerabilityMap.values()).sort((a, b) => {
-      const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 }
+      const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 }
       return severityOrder[a.severity] - severityOrder[b.severity]
     })
 
@@ -522,7 +656,8 @@ export class VulnerabilityAgent {
       critical: vulnerabilities.filter(v => v.severity === 'critical').length,
       high: vulnerabilities.filter(v => v.severity === 'high').length,
       medium: vulnerabilities.filter(v => v.severity === 'medium').length,
-      low: vulnerabilities.filter(v => v.severity === 'low').length
+      low: vulnerabilities.filter(v => v.severity === 'low').length,
+      info: vulnerabilities.filter(v => v.severity === 'info').length
     }
 
     return {
@@ -579,6 +714,71 @@ export class VulnerabilityAgent {
   }
 
   /**
+   * Enriches a vulnerability with metadata (CWE, CVSS, References) if missing
+   */
+  private enrichVulnerability(vuln: Vulnerability): Vulnerability {
+    const enriched = { ...vuln }
+    
+    // Metadata mapping for common vulnerability types
+    const commonVulns = {
+        'sql': { cwe: 'CWE-89', cvss: 9.8, refs: ['https://owasp.org/www-community/attacks/SQL_Injection'] },
+        'sqli': { cwe: 'CWE-89', cvss: 9.8, refs: ['https://owasp.org/www-community/attacks/SQL_Injection'] },
+        'xss': { cwe: 'CWE-79', cvss: 6.1, refs: ['https://owasp.org/www-community/attacks/xss/'] },
+        'cross-site': { cwe: 'CWE-79', cvss: 6.1, refs: ['https://owasp.org/www-community/attacks/xss/'] },
+        'scripting': { cwe: 'CWE-79', cvss: 6.1, refs: ['https://owasp.org/www-community/attacks/xss/'] },
+        'xml': { cwe: 'CWE-611', cvss: 8.2, refs: ['https://owasp.org/www-community/vulnerabilities/XML_External_Entity_(XXE)_Processing'] },
+        'idor': { cwe: 'CWE-639', cvss: 5.3, refs: ['https://cheatsheetseries.owasp.org/cheatsheets/Insecure_Direct_Object_Reference_Prevention_Cheat_Sheet.html'] },
+        'insecure direct': { cwe: 'CWE-639', cvss: 5.3, refs: ['https://cheatsheetseries.owasp.org/cheatsheets/Insecure_Direct_Object_Reference_Prevention_Cheat_Sheet.html'] },
+        'headers': { cwe: 'CWE-693', cvss: 3.7, refs: ['https://owasp.org/www-project-secure-headers/'] },
+        'disclosure': { cwe: 'CWE-200', cvss: 4.3, refs: ['https://portswigger.net/web-security/information-disclosure'] },
+        'authentication': { cwe: 'CWE-287', cvss: 8.8, refs: ['https://owasp.org/www-project-top-ten/2017/A2_2017-Broken_Authentication'] },
+        'exposure': { cwe: 'CWE-200', cvss: 7.5, refs: ['https://owasp.org/www-project-top-ten/2017/A3_2017-Sensitive_Data_Exposure'] },
+        'upload': { cwe: 'CWE-434', cvss: 8.8, refs: ['https://owasp.org/www-community/vulnerabilities/Unrestricted_File_Upload'] },
+        'traversal': { cwe: 'CWE-22', cvss: 7.5, refs: ['https://owasp.org/www-community/attacks/Path_Traversal'] },
+        'csrf': { cwe: 'CWE-352', cvss: 8.8, refs: ['https://owasp.org/www-community/attacks/csrf'] }
+    }
+
+    const lowerTitle = enriched.title.toLowerCase()
+    const match = Object.keys(commonVulns).find(k => lowerTitle.includes(k))
+    
+    if (match) {
+        console.log(`[Agent] Enriched ${enriched.title} with metadata from key: ${match}`)
+        const data = commonVulns[match]
+        if (!enriched.cwe || enriched.cwe === 'N/A' || enriched.cwe === 'None' || enriched.cwe === 'Unknown') enriched.cwe = data.cwe
+        if (!enriched.cvss || enriched.cvss === 0) enriched.cvss = data.cvss
+        if (!enriched.references || enriched.references.length === 0) enriched.references = data.refs
+    } else {
+        console.log(`[Agent] No metadata match found for: ${enriched.title}`)
+        if (!enriched.cwe || enriched.cwe === 'N/A') enriched.cwe = 'CWE-Unknown'
+        if (!enriched.cvss) enriched.cvss = 5.0
+    }
+
+    // Enforce description detail
+    if (enriched.description.length < 150) {
+        if (enriched.severity === 'critical' || enriched.severity === 'high') {
+            enriched.description += " This is a critical security flaw that could allow attackers to fully compromise the application, steal sensitive data, or modify records. The root cause typically involves untrusted user input being processed without proper sanitization or validation."
+        } else if (enriched.severity === 'medium') {
+            enriched.description += " Attackers could exploit this to perform unauthorized actions or access specific user data. This is often caused by missing access controls or insufficient input filtering."
+        } else {
+            enriched.description += " While not immediately exploitable for full compromise, this reveals information that aids attackers in crafting more specific targeted attacks. It is best practice to secure these endpoints."
+        }
+    }
+
+    // CRITICAL: Align severity with CVSS score (CVSS takes precedence)
+    if (enriched.cvss) {
+        if (enriched.cvss >= 9.0 && enriched.severity !== 'critical') {
+            console.log(`[Agent] Adjusting ${enriched.title} severity from ${enriched.severity} to critical (CVSS ${enriched.cvss})`)
+            enriched.severity = 'critical'
+        } else if (enriched.cvss >= 7.0 && enriched.cvss < 9.0 && enriched.severity === 'medium') {
+            console.log(`[Agent] Adjusting ${enriched.title} severity from ${enriched.severity} to high (CVSS ${enriched.cvss})`)
+            enriched.severity = 'high'
+        }
+    }
+
+    return enriched
+  }
+
+  /**
    * Generates a comprehensive final report based on selected vulnerabilities
    */
   async generateFullReport(
@@ -586,6 +786,10 @@ export class VulnerabilityAgent {
     crawledData: CrawledDataSummary,
     targetUrl: string
   ): Promise<FullReport> {
+    // CRITICAL: Enrich vulnerabilities first to ensure metadata is present
+    const enrichedVulnerabilities = selectedVulnerabilities.map(v => this.enrichVulnerability(v))
+    console.log(`[Agent] Enriched ${enrichedVulnerabilities.length} vulnerabilities for report generation`)
+    
     const generate = async (vulnerabilities: Vulnerability[], allowFallback: boolean): Promise<FullReport> => {
       const prompt = this.buildFullReportPrompt(
         vulnerabilities,
@@ -650,7 +854,35 @@ CRITICAL OUTPUT FORMAT:
           throw new Error('Invalid response format')
         }
         
-        return JSON.parse(jsonMatch[1] || jsonMatch[0])
+        const aiReport = JSON.parse(jsonMatch[1] || jsonMatch[0])
+        
+        // CRITICAL: Merge enriched metadata back into AI's vulnerabilities
+        // The AI rewrites vulnerabilities and loses cwe/cvss/references
+        // We need to match by title and restore the metadata
+        if (aiReport.vulnerabilities && Array.isArray(aiReport.vulnerabilities)) {
+          aiReport.vulnerabilities = aiReport.vulnerabilities.map((aiVuln: any) => {
+            // Find matching enriched vulnerability by title
+            const enriched = vulnerabilities.find(v => 
+              v.title.toLowerCase() === aiVuln.title?.toLowerCase()
+            )
+            
+            if (enriched) {
+              // Merge enriched metadata into AI's vulnerability
+              return {
+                ...aiVuln,
+                cwe: enriched.cwe,
+                cvss: enriched.cvss,
+                references: enriched.references
+              }
+            }
+            
+            return aiVuln
+          })
+          
+          console.log('[Agent] Merged enriched metadata into AI report vulnerabilities')
+        }
+        
+        return aiReport
       } catch (error: any) {
         // Handle Rate Limit (413 or 429) by truncating data
         if (allowFallback && (error?.status === 413 || error?.code === 'rate_limit_exceeded')) {
@@ -669,7 +901,7 @@ CRITICAL OUTPUT FORMAT:
       }
     }
 
-    return generate(selectedVulnerabilities, true)
+    return generate(enrichedVulnerabilities, true)
   }
 
 

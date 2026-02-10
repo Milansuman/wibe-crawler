@@ -123,11 +123,11 @@ app.whenReady().then(() => {
             assets: r.assets,
             error: r.error
           })),
-          domains: crawler!.getAllDiscoveredDomains(),
-          allApiCalls: crawler!.getAllApiCalls(),
-          allCookies: crawler!.getAllCookies(),
-          allEmails: crawler!.getAllEmails(),
-          allAssets: crawler!.getAllAssets()
+          domains: crawler ? crawler.getAllDiscoveredDomains() : [],
+          allApiCalls: crawler ? crawler.getAllApiCalls() : [],
+          allCookies: crawler ? crawler.getAllCookies() : [],
+          allEmails: crawler ? crawler.getAllEmails() : [],
+          allAssets: crawler ? crawler.getAllAssets() : {}
         })
       },
       (urls: string[]) => {

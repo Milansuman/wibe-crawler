@@ -157,7 +157,8 @@ export class WebCrawler {
       }
 
       if (this.stopped) break
-      await new Promise(r => setTimeout(r, 500))
+      // Reduced delay for faster crawling (especially important for HTTPS)
+      await new Promise(r => setTimeout(r, 200))
     }
 
     return this.results
@@ -223,7 +224,21 @@ export class WebCrawler {
     })
 
     try {
-        await win.loadURL(url, { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' })
+        // Add timeout to prevent HTTPS sites from hanging indefinitely
+        const loadPromise = win.loadURL(url, { 
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            extraHeaders: 'Accept-Encoding: gzip, deflate' // Enable compression for faster downloads
+        })
+        
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Page load timeout')), 10000) // 10 second timeout
+        )
+        
+        await Promise.race([loadPromise, timeoutPromise]).catch(err => {
+            console.warn(`Timeout or error loading ${url}:`, err.message)
+            // Continue anyway, we may have partial content
+        })
+        
         const title = win.getTitle()
 
         // Extract data using executeJavaScript
