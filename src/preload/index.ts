@@ -59,7 +59,13 @@ const api = {
   },
   analyzer: {
     analyzeVulnerabilities: (data: any) => ipcRenderer.invoke('analyze-vulnerabilities', data),
-    generateReport: (data: any) => ipcRenderer.invoke('generate-report', data)
+    generateReport: (data: any) => ipcRenderer.invoke('generate-report', data),
+    onQuotaStatus: (callback: (data: { exhausted: boolean }) => void) => {
+      ipcRenderer.on('quota-status', (_, data) => callback(data))
+    },
+    removeAllListeners: () => {
+      ipcRenderer.removeAllListeners('quota-status')
+    }
   }
 }
 

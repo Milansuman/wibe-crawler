@@ -22,12 +22,12 @@ const VulnerabilitySchema = z.object({
   references: z.array(z.string()).optional(),
   affectedAssets: z.array(z.string()),
   proof: z.object({
-    payload: z.string().optional(),
-    parameter: z.string().optional(),
-    request: z.string().optional(),
-    response: z.string().optional(),
-    confidence: z.enum(['High', 'Medium', 'Low']).optional()
-  }).optional()
+    payload: z.string().nullish(),
+    parameter: z.string().nullish(),
+    request: z.string().nullish(),
+    response: z.string().nullish(),
+    confidence: z.enum(['High', 'Medium', 'Low']).nullish()
+  }).nullish()
 })
 
 const StatisticsSchema = z.object({
@@ -55,7 +55,7 @@ const FullReportSchema = z.object({
 })
 
 export interface Vulnerability {
-  id: string
+  id?: string
   title: string
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
   cwe?: string
@@ -67,12 +67,12 @@ export interface Vulnerability {
   references?: string[]
   affectedAssets: string[]
   proof?: {
-    payload?: string
-    parameter?: string
-    request?: string
-    response?: string
-    confidence?: 'High' | 'Medium' | 'Low'
-  }
+    payload?: string | null
+    parameter?: string | null
+    request?: string | null
+    response?: string | null
+    confidence?: 'High' | 'Medium' | 'Low' | null
+  } | null
 }
 
 export interface VulnerabilityReport {
@@ -116,32 +116,74 @@ export interface CrawledDataSummary {
   fuzzResults?: FuzzResult[]
 }
 
-/**
- * Filters and samples crawled data to reduce payload size for API requests
- * Keeps the most important items while removing duplicates and limiting arrays
- */
-interface FilteredCrawledData {
-  crawlResults: CrawlResult[]
-  allApiCalls: ApiCall[]
-  allCookies: CookieData[]
-  allEmails: string[]
-  allAssets: Record<string, string[]>
-  discoveredDomains: string[]
-  fuzzResults?: FuzzResult[]
-  dataWasFiltered: boolean
-  originalCounts: {
-    crawlResults: number
-    allApiCalls: number
-    allCookies: number
-    allEmails: number
-    discoveredDomains: number
-    allAssets: number
-    fuzzResults: number
+
+interface KeyMetadata {
+  index: number
+  client: Groq
+  onCooldownUntil: number
+  inUse: boolean
+}
+
+class KeyManager {
+  private keys: KeyMetadata[] = []
+
+  constructor(clients: Groq[]) {
+    this.keys = clients.map((client, index) => ({
+      index,
+      client,
+      onCooldownUntil: 0,
+      inUse: false
+    }))
+  }
+
+  /**
+   * Leases the first available healthy key
+   */
+  async leaseKey(): Promise<KeyMetadata | null> {
+    const now = Date.now()
+    // Find a key that is not in use and not on cooldown
+    const availableKey = this.keys.find(k => !k.inUse && k.onCooldownUntil < now)
+    
+    if (availableKey) {
+      availableKey.inUse = true
+      return availableKey
+    }
+    
+    return null
+  }
+
+  /**
+   * Releases a key back to the pool
+   */
+  releaseKey(index: number) {
+    if (this.keys[index]) {
+      this.keys[index].inUse = false
+    }
+  }
+
+  /**
+   * Marks a key as being on cooldown
+   */
+  markCooldown(index: number, durationMs: number = 60000) {
+    if (this.keys[index]) {
+      this.keys[index].onCooldownUntil = Date.now() + durationMs
+      this.keys[index].inUse = false
+    }
+  }
+
+  get totalKeys(): number {
+    return this.keys.length
+  }
+
+  get healthyKeyCount(): number {
+    const now = Date.now()
+    return this.keys.filter(k => k.onCooldownUntil < now).length
   }
 }
 
 export class VulnerabilityAgent {
-  private client: Groq
+  private keyManager: KeyManager
+  private clients: Groq[] = []
   private model: string = 'llama-3.3-70b-versatile'
 
   constructor(apiKey?: string, model: string = 'llama-3.3-70b-versatile') {
@@ -150,8 +192,6 @@ export class VulnerabilityAgent {
     // Fallback: Check if key is missing or looks like a placeholder (starts with "your_" or doesn't start with "gsk_")
     if (!key || key.trim().startsWith('your_') || !key.trim().startsWith('gsk_')) {
       try {
-        // Try to read .env file from project root
-        // In dev, cwd is usually project root. In prod, it might be different, but this is a dev environment issue.
         const projectRoot = process.cwd()
         const envPath = path.join(projectRoot, '.env')
         console.log('[Agent] Checking .env file at:', envPath)
@@ -161,10 +201,12 @@ export class VulnerabilityAgent {
           const match = envContent.match(/^GROQ_API_KEY=(.*)$/m)
           if (match && match[1]) {
             const fileKey = match[1].trim()
-            if (fileKey && fileKey.startsWith('gsk_')) {
-              console.log('[Agent] Found valid key in .env file, overriding system env var')
+            // Check if it's a list or a single key
+            const firstKey = fileKey.split(',')[0].trim()
+            if (firstKey && firstKey.startsWith('gsk_')) {
+              console.log('[Agent] Found valid key(s) in .env file, overriding system env var')
               key = fileKey
-              process.env.GROQ_API_KEY = fileKey // Update process.env for subsequent calls
+              process.env.GROQ_API_KEY = fileKey 
             }
           }
         }
@@ -178,111 +220,47 @@ export class VulnerabilityAgent {
     }
     this.model = model
 
-    this.client = new Groq({
-      apiKey: key
-    })
+    // Support for multiple comma-separated keys
+    const keys = key.split(',').map(k => k.trim()).filter(k => k.length > 0 && k.startsWith('gsk_'))
+    
+    if (keys.length === 0) {
+      throw new Error('No valid GROQ_API_KEYS found (must start with gsk_)')
+    }
+
+    console.log(`[Agent] Initializing with ${keys.length} API key(s)`)
+    this.clients = keys.map(k => new Groq({ apiKey: k }))
+    this.keyManager = new KeyManager(this.clients)
   }
 
-  /**
-   * Sets the model to use (e.g., 'llama-3.1-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it')
-   */
   setModel(model: string): void {
     this.model = model
   }
 
+
   /**
-   * Filters and samples crawled data to keep request size manageable
-   * Removes duplicates and limits arrays to most important items
+   * Samples assets to keep payload size manageable
    */
-  private filterCrawledData(data: CrawledDataSummary): FilteredCrawledData {
-    // Drastically reduced limits to prevent token overflow (was hitting 34k, limit is 12k)
-    const MAX_CRAWL_RESULTS = 5      // Reduced from 30
-    const MAX_API_CALLS = 15         // Reduced from 50  
-    const MAX_COOKIES = 15           // Reduced from 30
-    const MAX_EMAILS = 20            // Reduced from 50
-    const MAX_DOMAINS = 20           // Reduced from 50
-    const MAX_FUZZ_RESULTS = 10      // Reduced from 30
-    const MAX_ASSETS_PER_TYPE = 5    // Reduced from 10
-
-    const originalCounts = {
-      crawlResults: data.crawlResults.length,
-      allApiCalls: data.allApiCalls.length,
-      allCookies: data.allCookies.length,
-      allEmails: data.allEmails.length,
-      discoveredDomains: data.discoveredDomains.length,
-      allAssets: Object.values(data.allAssets).reduce((sum, arr) => sum + arr.length, 0),
-      fuzzResults: data.fuzzResults?.length || 0
+  private sampleAssets(assets: Record<string, string[]>): Record<string, string[]> {
+    const sampled: Record<string, string[]> = {}
+    for (const [type, urls] of Object.entries(assets)) {
+      sampled[type] = urls.slice(0, 5) // Only top 5 of each type
     }
+    return sampled
+  }
 
-    // Filter crawl results - keep most important (those with forms or suspicious patterns)
-    const filteredCrawlResults = data.crawlResults
-      .sort((a, b) => {
-        // Prioritize URLs with forms, suspicious paths, or auth-related pages
-        const aScore = (a.forms?.length || 0) * 100 + (a.url.includes('admin') || a.url.includes('login') ? 50 : 0)
-        const bScore = (b.forms?.length || 0) * 100 + (b.url.includes('admin') || b.url.includes('login') ? 50 : 0)
-        return bScore - aScore
-      })
-      .slice(0, MAX_CRAWL_RESULTS)
-
-    // Filter API calls - keep unique endpoints and suspicious methods
-    const seenApiEndpoints = new Set<string>()
-    const filteredApiCalls = data.allApiCalls
-      .filter(call => {
-        const endpoint = `${call.method}:${call.url}`
-        if (seenApiEndpoints.has(endpoint)) return false
-        seenApiEndpoints.add(endpoint)
-        return true
-      })
-      .slice(0, MAX_API_CALLS)
-
-    // Filter cookies - keep unique ones by name
-    const seenCookies = new Set<string>()
-    const filteredCookies = data.allCookies
-      .filter(cookie => {
-        const key = `${cookie.name}:${cookie.domain}`
-        if (seenCookies.has(key)) return false
-        seenCookies.add(key)
-        return true
-      })
-      .slice(0, MAX_COOKIES)
-
-    // Filter emails - unique values only
-    const filteredEmails = [...new Set(data.allEmails)].slice(0, MAX_EMAILS)
-
-    // Filter domains - unique values only
-    const filteredDomains = [...new Set(data.discoveredDomains)].slice(0, MAX_DOMAINS)
-
-    // Filter assets - keep max per type
-    const filteredAssets: Record<string, string[]> = {}
-    for (const [type, assets] of Object.entries(data.allAssets)) {
-      const uniqueAssets = [...new Set(assets)]
-      filteredAssets[type] = uniqueAssets.slice(0, MAX_ASSETS_PER_TYPE)
+  /**
+   * Downgrades the model to a more context-efficient one if hit by repeated errors
+   */
+  private downgradeModel(): boolean {
+    const lighterModels = ['llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768']
+    const currentIndex = lighterModels.indexOf(this.model)
+    
+    if (currentIndex < lighterModels.length - 1) {
+      this.model = lighterModels[currentIndex + 1]
+      console.log(`[Agent] Downgraded to model: ${this.model} for better token efficiency`)
+      return true
     }
-
-    // Filter fuzz results - keep interesting ones (non-404s)
-    const filteredFuzzResults = data.fuzzResults
-      ?.filter(result => result.statusCode && result.statusCode !== 404)
-      .slice(0, MAX_FUZZ_RESULTS)
-
-    const dataWasFiltered =
-      originalCounts.crawlResults > MAX_CRAWL_RESULTS ||
-      originalCounts.allApiCalls > MAX_API_CALLS ||
-      originalCounts.allCookies > MAX_COOKIES ||
-      originalCounts.allEmails > MAX_EMAILS ||
-      originalCounts.discoveredDomains > MAX_DOMAINS ||
-      (originalCounts.fuzzResults || 0) > MAX_FUZZ_RESULTS
-
-    return {
-      crawlResults: filteredCrawlResults,
-      allApiCalls: filteredApiCalls,
-      allCookies: filteredCookies,
-      allEmails: filteredEmails,
-      allAssets: filteredAssets,
-      discoveredDomains: filteredDomains,
-      fuzzResults: filteredFuzzResults,
-      dataWasFiltered,
-      originalCounts
-    }
+    return false
   }
 
   /**
@@ -290,7 +268,7 @@ export class VulnerabilityAgent {
    */
   private extractJSON(response: string): string {
     // Strategy 1: Look for XML-style tags
-    const xmlMatch = response.match(/<vulnerability>([\s\S]*?)<\/vulnerability>/i)
+    const xmlMatch = response.match(/<(?:vulnerability|report)>([\s\S]*?)<\/(?:vulnerability|report)>/i)
     if (xmlMatch) {
       return xmlMatch[1].trim()
     }
@@ -302,13 +280,23 @@ export class VulnerabilityAgent {
     }
 
     // Strategy 3: Look for JSON object or array (most permissive)
-    const jsonMatch = response.match(/(\{[\s\S]*\}|\[[\s\S]*\])/m)
-    if (jsonMatch) {
-      return jsonMatch[1].trim()
+    // We look for the FIRST { or [ and the LAST } or ]
+    const firstBrace = response.indexOf('{')
+    const firstBracket = response.indexOf('[')
+    const start = (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) ? firstBrace : firstBracket
+
+    if (start !== -1) {
+      const lastBrace = response.lastIndexOf('}')
+      const lastBracket = response.lastIndexOf(']')
+      const end = Math.max(lastBrace, lastBracket)
+      
+      if (end > start) {
+        return response.substring(start, end + 1).trim()
+      }
     }
 
-    // Strategy 4: Return the response as-is if it starts with { or [
-    const trimmed = response.trim()
+    // Strategy 4: Return stripped response if it looks like JSON
+    const trimmed = response.trim().replace(/^`+|`+$/g, '')
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       return trimmed
     }
@@ -321,17 +309,17 @@ export class VulnerabilityAgent {
    * Groups similar data types together to reduce payload per request
    */
   private createDataClusters(data: CrawledDataSummary): CrawledDataSummary[] {
-    const CLUSTER_SIZE = 15
+    const CLUSTER_SIZE = 8
     const clusters: CrawledDataSummary[] = []
 
     // Split crawl results into clusters
-    const crawlClusters = []
+    const crawlClusters: CrawlResult[][] = []
     for (let i = 0; i < data.crawlResults.length; i += CLUSTER_SIZE) {
       crawlClusters.push(data.crawlResults.slice(i, i + CLUSTER_SIZE))
     }
 
     // Split API calls into clusters
-    const apiClusters = []
+    const apiClusters: ApiCall[][] = []
     for (let i = 0; i < data.allApiCalls.length; i += CLUSTER_SIZE) {
       apiClusters.push(data.allApiCalls.slice(i, i + CLUSTER_SIZE))
     }
@@ -343,11 +331,11 @@ export class VulnerabilityAgent {
       const cluster: CrawledDataSummary = {
         crawlResults: crawlClusters[i] || [],
         allApiCalls: apiClusters[i] || [],
-        allCookies: data.allCookies, // Include all cookies in each cluster for context
-        allEmails: data.allEmails, // Include all emails in each cluster for context
-        allAssets: data.allAssets, // Include all assets in each cluster for context
-        discoveredDomains: data.discoveredDomains, // Include domains for context
-        fuzzResults: data.fuzzResults
+        allCookies: data.allCookies.slice(0, 10), // Reduced from all to top 10
+        allEmails: data.allEmails.slice(0, 10),   // Reduced from all to top 10
+        allAssets: this.sampleAssets(data.allAssets), // Sampled assets
+        discoveredDomains: data.discoveredDomains.slice(0, 10), // Sampled domains
+        fuzzResults: data.fuzzResults?.slice(0, 5) // Sampled fuzz results
       }
       clusters.push(cluster)
     }
@@ -362,245 +350,257 @@ export class VulnerabilityAgent {
   private async analyzeDataCluster(
     clusterData: CrawledDataSummary,
     clusterIndex: number,
-    totalClusters: number
+    totalClusters: number,
+    onQuotaExhausted?: (exhausted: boolean) => void
   ): Promise<VulnerabilityReport> {
     const prompt = this.buildAnalysisPrompt(clusterData, clusterIndex, totalClusters)
 
+
+    const leasedKey = await this.keyManager.leaseKey()
+    
+    if (!leasedKey) {
+      console.warn(`[Batch] No healthy keys available for cluster ${clusterIndex + 1}. Stopping analysis.`)
+      if (onQuotaExhausted) onQuotaExhausted(true)
+      throw new Error('API quota exhausted. All keys are on cooldown.')
+    }
+
+    if (onQuotaExhausted) onQuotaExhausted(false)
+
     try {
-      console.log(`Analyzing cluster ${clusterIndex + 1}/${totalClusters}...`)
-      
-      const message = await this.client.chat.completions.create({
-        model: this.model, // Use the instance model which defaults to llama-3.3-70b-versatile
-        messages: [
-          {
-            role: 'system',
-            content: `You are an expert penetration tester and security auditor conducting an authorized security assessment.
-            Analyze the provided web crawl data for potential security vulnerabilities.
-            
-            CRITICAL: You MUST provide CONCRETE PROOF for each vulnerability. Do NOT use vague language like "may be vulnerable" or "potential".
-            Instead, extract ACTUAL EVIDENCE from the crawl data.
-            
-            ═══════════════════════════════════════════════════════════════
-            STRICT FORMATTING RULES (MUST FOLLOW):
-            ═══════════════════════════════════════════════════════════════
-            
-            1. USE STANDARD NAMING ONLY (NO variations allowed):
-               ✅ "SQL Injection (SQLi)"
-               ✅ "Cross-Site Scripting (XSS)"  
-               ✅ "Insecure Direct Object Reference (IDOR)"
-               ✅ "Missing Security Headers"
-               ✅ "Information Disclosure"
-               ✅ "Authentication Bypass"
-               ❌ NO: "Potential SQL Injection", "SQL Injection Vulnerability", "Possible XSS"
-            
-            2. SEVERITY MAPPING (fixed, non-negotiable):
-               - HIGH: SQL Injection, Stored XSS, Authentication Bypass, Remote Code Execution
-               - MEDIUM: Reflected XSS, IDOR, CSRF, Missing Security Headers
-               - LOW: Information Disclosure (minor), Insecure Cookies, Version Disclosure
-               - INFO: Best practice violations, recommendations
-            
-            3. NO DUPLICATES - If same vulnerability type found multiple times:
-               - Create ONE entry for that type
-               - Combine ALL URLs under "affectedAssets" array
-               Example: If XSS found on 3 pages → ONE "Cross-Site Scripting (XSS)" entry with 3 URLs
-            
-            4. ALWAYS INCLUDE (MANDATORY for every finding):
-               - Parameter name (e.g., "id", "search", "cat", "file")  
-               - Endpoint (e.g., "search.php", "product.php", "/api/user")
-               These MUST appear in the description or proof section
-            
-            5. DESCRIPTION FORMAT:
-               "[Vulnerability Type] found in the '[parameter]' parameter at [endpoint]. [Details]."
-               Example: "SQL Injection found in the 'id' parameter at product.php. Database error messages indicate..."
-            
-            6. DETAILED ANALYSIS REQUIRED:
-               - Description must be at least 2-3 sentences long.
-               - Explain the IMPACT of the vulnerability (what can an attacker do?).
-               - Explain the ROOT CAUSE (why is it happening?).
-               
-            7. METADATA REQUIRED:
-               - CWE ID: Common Weakness Enumeration ID (e.g., "CWE-89")
-               - CVSS Score: Estimated CVSS v3.1 score (e.g., "9.8")
-               - References: Array of 1-2 standard links (OWASP, NIST, PortSwigger)
-            
-            ═══════════════════════════════════════════════════════════════
-            
-            For EACH vulnerability, you MUST include a "proof" object with:
-            - payload: The EXACT test string/input that triggered the issue (from forms, URLs, or API calls)
-            - parameter: The SPECIFIC parameter name that is vulnerable (e.g., "id", "search", "username")
-            - request: A snippet of the actual HTTP request showing the vulnerability (from crawl data)
-            - response: A snippet of the actual HTTP response proving the issue (error messages, reflected input, etc.)
-            - confidence: "High" (confirmed with evidence), "Medium" (strong indicators), or "Low" (theoretical)
-            
-            EXAMPLE of GOOD output (with proof & metadata):
-            {
-              "title": "SQL Injection (SQLi)",
-              "severity": "high",
-              "cwe": "CWE-89",
-              "cvss": 7.5,
-              "description": "SQL Injection found in the 'id' parameter at /user/profile.php. Database error messages indicate unfiltered input. An attacker could use this vulnerability to bypass authentication, access unauthorized data, or modify the database structure. The root cause is the direct concatenation of user input into SQL queries without sanitization.",
-              "recommendation": "Use parameterized queries or prepared statements. Ensure all user input is validated and sanitized before use in database queries.",
-              "references": ["https://owasp.org/www-community/attacks/SQL_Injection", "https://cwe.mitre.org/data/definitions/89.html"],
-              "affectedAssets": ["https://example.com/user/profile.php?id=1", "https://example.com/admin/edit.php?id=5"],
-              "proof": {
-                "payload": "' OR 1=1--",
-                "parameter": "id",
-                "request": "GET /user/profile.php?id=' OR 1=1-- HTTP/1.1",
-                "response": "You have an error in your SQL syntax near '' OR 1=1--'",
-                "confidence": "High"
-              }
-            }
-            
-            EXAMPLE of BAD output (vague, wrong naming, missing meta):
-            {
-              "title": "Potential SQL Injection",  // ❌ Wrong - should be "SQL Injection (SQLi)"
-              "severity": "critical",  // ❌ Wrong - SQLi is "high"
-              "description": "The application may be vulnerable..."  // ❌ Too short, no impact/root cause
-              // ❌ NO CWE, CVSS, References, or Proof
-            }
-            
-            HOW TO EXTRACT PROOF from crawl data:
-            1. Check "forms" array for input fields → use field "name" as parameter
-            2. Check "apiCalls" for request/response data → extract method, URL, status
-            3. Check page content/"html" for error messages or sensitive data exposure
-            4. Look for patterns: SQL errors, XSS reflection, directory listings, exposed credentials
-            
-            Focus on:
-            - OWASP Top 10 vulnerabilities (SQLi, XSS, etc.)
-            - Information Leakage (sensitive paths, patterns, error messages)
-            - Unsafe configurations
-            
-            Return ONLY a valid JSON object with the following structure:
-            {
-              "vulnerabilities": [
-                {
-                  "title": "string",
-                  "severity": "critical" | "high" | "medium" | "low" | "info",
-                  "cwe": "string (e.g. CWE-89)",
-                  "cvss": number,
-                  "description": "string",
-                  "recommendation": "string",
-                  "references": ["url1", "url2"],
-                  "affectedAssets": ["url or path"],
-                  "proof": {
-                    "payload": "string (the exact payload used, e.g. <script>alert(1)</script>)",
-                    "parameter": "string (the parameter name, e.g. 'id' or 'q')",
-                    "request": "string (snippet of the HTTP request)",
-                    "response": "string (snippet of the HTTP response showing the issue)",
-                    "confidence": "High" | "Medium" | "Low"
-                  }
-                }
-              ],
-              "summary": "string"
-            }
-            
-            REMINDER: 
-            - NO duplicate vulnerability types (merge them!)
-            - ALWAYS include parameter name and endpoint
-            - ALWAYS include CWE, CVSS, References
-            - Use STANDARD names only
-            - Follow SEVERITY mapping strictly
-            
-            If no specific vulnerabilities are found, look for potential best-practice violations or information disclosure.`
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 8000
-      })
-
-      const response = message.choices[0]?.message?.content
-      if (!response) {
-        throw new Error('Empty response from Groq API')
-      }
-
-      console.log(`Cluster ${clusterIndex + 1} response (first 300 chars):`, response.substring(0, 300))
-
-      // Try to parse the content as JSON directly first
-      let parsed: any;
-      try {
-        parsed = JSON.parse(response)
-      } catch (parseError) {
-        console.log('[Agent] JSON parse failed, trying extractor:', parseError)
-        const jsonString = this.extractJSON(response)
-        parsed = JSON.parse(jsonString)
-      }
-
-      // Validate with Zod
-      console.log(`[Agent] Validating parsed JSON with schema...`)
-      const validatedReport = VulnerabilityReportSchema.parse(parsed)
-      
-      // Add IDs if missing and ENRICH with metadata if AI missed it
-      const processedVulnerabilities = validatedReport.vulnerabilities.map(v => {
-        const withId = {
-          ...v,
-          id: v.id || Math.random().toString(36).substring(7),
-          type: v.type || 'Security Vulnerability'
-        } as Vulnerability
+      console.log(`[Batch] Analyzing cluster ${clusterIndex + 1}/${totalClusters} (Key #${leasedKey.index + 1})...`)
         
-        return this.enrichVulnerability(withId)
-      }) as Vulnerability[]
+      const message = await leasedKey.client.chat.completions.create({
+          model: this.model,
+          messages: [
+            {
+              role: 'system',
+              content: `You are an expert penetration tester and security auditor conducting an authorized security assessment.
+              Analyze the provided web crawl data for potential security vulnerabilities.
+              
+              CRITICAL: You MUST provide CONCRETE PROOF for each vulnerability. Do NOT use vague language like "may be vulnerable" or "potential".
+              Instead, extract ACTUAL EVIDENCE from the crawl data.
+              
+              ═══════════════════════════════════════════════════════════════
+              STRICT FORMATTING RULES (MUST FOLLOW):
+              ═══════════════════════════════════════════════════════════════
+              
+              1. USE STANDARD NAMING ONLY (NO variations allowed):
+                 ✅ "SQL Injection (SQLi)"
+                 ✅ "Cross-Site Scripting (XSS)"  
+                 ✅ "Insecure Direct Object Reference (IDOR)"
+                 ✅ "Missing Security Headers"
+                 ✅ "Information Disclosure"
+                 ✅ "Authentication Bypass"
+                 ❌ NO: "Potential SQL Injection", "SQL Injection Vulnerability", "Possible XSS"
+              
+              2. SEVERITY MAPPING (fixed, non-negotiable):
+                 - HIGH: SQL Injection, Stored XSS, Authentication Bypass, Remote Code Execution
+                 - MEDIUM: Reflected XSS, IDOR, CSRF, Missing Security Headers
+                 - LOW: Information Disclosure (minor), Insecure Cookies, Version Disclosure
+                 - INFO: Best practice violations, recommendations
+              
+              3. NO DUPLICATES - If same vulnerability type found multiple times:
+                 - Create ONE entry for that type
+                 - Combine ALL URLs under "affectedAssets" array
+                 Example: If XSS found on 3 pages → ONE "Cross-Site Scripting (XSS)" entry with 3 URLs
+              
+              4. ALWAYS INCLUDE (MANDATORY for every finding):
+                 - Parameter name (e.g., "id", "search", "cat", "file")  
+                 - Endpoint (e.g., "search.php", "product.php", "/api/user")
+                 These MUST appear in the description or proof section
+              
+              5. DESCRIPTION FORMAT:
+                 "[Vulnerability Type] found in the '[parameter]' parameter at [endpoint]. [Details]."
+                 Example: "SQL Injection found in the 'id' parameter at product.php. Database error messages indicate..."
+              
+              6. DETAILED ANALYSIS REQUIRED:
+                 - Description must be at least 2-3 sentences long.
+                 - Explain the IMPACT of the vulnerability (what can an attacker do?).
+                 - Explain the ROOT CAUSE (why is it happening?).
+                 
+              7. METADATA REQUIRED:
+                 - CWE ID: Common Weakness Enumeration ID (e.g., "CWE-89")
+                 - CVSS Score: Estimated CVSS v3.1 score (e.g., "9.8")
+                 - References: Array of 1-2 standard links (OWASP, NIST, PortSwigger)
+              
+              ═══════════════════════════════════════════════════════════════
+              
+              For EACH vulnerability, you MUST include a "proof" object with:
+              - payload: The EXACT test string/input that triggered the issue (from forms, URLs, or API calls)
+              - parameter: The SPECIFIC parameter name that is vulnerable (e.g., "id", "search", "username")
+              - request: A snippet of the actual HTTP request showing the vulnerability (from crawl data)
+              - response: A snippet of the actual HTTP response proving the issue (error messages, reflected input, etc.)
+              - confidence: "High" (confirmed with evidence), "Medium" (strong indicators), or "Low" (theoretical)
+              
+              EXAMPLE of GOOD output (with proof & metadata):
+              {
+                "title": "SQL Injection (SQLi)",
+                "severity": "high",
+                "cwe": "CWE-89",
+                "cvss": 7.5,
+                "description": "SQL Injection found in the 'id' parameter at /user/profile.php. Database error messages indicate unfiltered input. An attacker could use this vulnerability to bypass authentication, access unauthorized data, or modify the database structure. The root cause is the direct concatenation of user input into SQL queries without sanitization.",
+                "recommendation": "Use parameterized queries or prepared statements. Ensure all user input is validated and sanitized before use in database queries.",
+                "references": ["https://owasp.org/www-community/attacks/SQL_Injection", "https://cwe.mitre.org/data/definitions/89.html"],
+                "affectedAssets": ["https://example.com/user/profile.php?id=1", "https://example.com/admin/edit.php?id=5"],
+                "proof": {
+                  "payload": "' OR 1=1--",
+                  "parameter": "id",
+                  "request": "GET /user/profile.php?id=' OR 1=1-- HTTP/1.1",
+                  "response": "You have an error in your SQL syntax near '' OR 1=1--'",
+                  "confidence": "High"
+                }
+              }
+              
+              EXAMPLE of BAD output (vague, wrong naming, missing meta):
+              {
+                "title": "Potential SQL Injection",  // ❌ Wrong - should be "SQL Injection (SQLi)"
+                "severity": "critical",  // ❌ Wrong - SQLi is "high"
+                "description": "The application may be vulnerable..."  // ❌ Too short, no impact/root cause
+                // ❌ NO CWE, CVSS, References, or Proof
+              }
+              
+              HOW TO EXTRACT PROOF from crawl data:
+              1. Check "forms" array for input fields → use field "name" as parameter
+              2. Check "apiCalls" for request/response data → extract method, URL, status
+              3. Check page content/"html" for error messages or sensitive data exposure
+              4. Look for patterns: SQL errors, XSS reflection, directory listings, exposed credentials
+              
+              Focus on:
+              - OWASP Top 10 vulnerabilities (SQLi, XSS, etc.)
+              - Information Leakage (sensitive paths, patterns, error messages)
+              - Unsafe configurations
+              
+              Return ONLY a valid JSON object with the following structure:
+              {
+                "vulnerabilities": [
+                  {
+                    "title": "string",
+                    "severity": "critical" | "high" | "medium" | "low" | "info",
+                    "cwe": "string (e.g. CWE-89)",
+                    "cvss": number,
+                    "description": "string",
+                    "recommendation": "string",
+                    "references": ["url1", "url2"],
+                    "affectedAssets": ["url or path"],
+                    "proof": {
+                      "payload": "string (the exact payload used, e.g. <script>alert(1)</script>)",
+                      "parameter": "string (the parameter name, e.g. 'id' or 'q')",
+                      "request": "string (snippet of the HTTP request)",
+                      "response": "string (snippet of the HTTP response showing the issue)",
+                      "confidence": "High" | "Medium" | "Low"
+                    }
+                  }
+                ],
+                "summary": "string"
+              }
+              
+              REMINDER: 
+              - NO duplicate vulnerability types (merge them!)
+              - ALWAYS include parameter name and endpoint
+              - ALWAYS include CWE, CVSS, References
+              - Use STANDARD names only
+              - Follow SEVERITY mapping strictly
+              
+              If no specific vulnerabilities are found, look for potential best-practice violations or information disclosure.`
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.3,
+          max_tokens: 8000
+        })
 
-      // Calculate statistics
-      const stats = {
-        total: processedVulnerabilities.length,
-        critical: processedVulnerabilities.filter(v => v.severity === 'critical').length,
-        high: processedVulnerabilities.filter(v => v.severity === 'high').length,
-        medium: processedVulnerabilities.filter(v => v.severity === 'medium').length,
-        low: processedVulnerabilities.filter(v => v.severity === 'low').length,
-        info: processedVulnerabilities.filter(v => v.severity === 'info').length
-      }
+        const response = message.choices[0]?.message?.content
+        if (!response) {
+          throw new Error('Empty response from Groq API')
+        }
 
-      const report: VulnerabilityReport = {
-        summary: validatedReport.summary || `Found ${stats.total} potential vulnerabilities.`,
-        vulnerabilities: processedVulnerabilities,
-        statistics: stats,
-        generatedAt: new Date().toISOString()
-      }
+        console.log(`Cluster ${clusterIndex + 1} response (first 300 chars):`, response.substring(0, 300))
 
-      return report
-    } catch (error: any) {
-      // Handle Rate Limit (429) gracefully
-      if (error?.status === 429 || error?.code === 'rate_limit_exceeded' || error?.message?.includes('rate limit')) {
-        console.warn(`[Agent] Rate limit exceeded in cluster ${clusterIndex + 1}. Returning partial result.`)
-        return {
-          summary: 'Analysis paused: Rate limit reached.',
-          vulnerabilities: [{
-            id: 'rate_limit_exceeded',
-            title: 'Analysis Paused: API Rate Limit Reached',
-            severity: 'info',
-            description: `The AI analysis service daily limit has been reached (Requested: ${error?.error?.message || 'unknown'}). Analysis for this batch could not complete.`,
-            type: 'System Limitation',
-            location: 'System',
-            recommendation: 'Please wait for your quota to reset (usually 24h) or upgrade your plan. You can also try reducing the number of pages scanned.',
-            affectedAssets: []
-          }],
-          statistics: {
-            total: 1,
-            critical: 0,
-            high: 0,
-            medium: 0,
-            low: 0
-          },
+        let parsed: any;
+        let jsonString = response;
+        try {
+          parsed = JSON.parse(response)
+        } catch (parseError) {
+          console.log('[Agent] JSON parse failed, trying extractor:', parseError)
+          jsonString = this.extractJSON(response)
+          try {
+            parsed = JSON.parse(jsonString)
+          } catch (innerError) {
+            console.error('[Agent] Extracted JSON still invalid:', jsonString)
+            throw innerError
+          }
+        }
+
+        // Validate with Zod
+        console.log(`[Agent] Validating parsed JSON with schema...`)
+        const validatedReport = VulnerabilityReportSchema.parse(parsed)
+        
+        // Add IDs if missing and ENRICH with metadata if AI missed it
+        const processedVulnerabilities = validatedReport.vulnerabilities.map(v => {
+          const withId = {
+            ...v,
+            id: v.id || Math.random().toString(36).substring(7),
+            type: v.type || 'Security Vulnerability'
+          } as Vulnerability
+          
+          return this.enrichVulnerability(withId)
+        }) as Vulnerability[]
+
+        // Calculate statistics
+        const stats = {
+          total: processedVulnerabilities.length,
+          critical: processedVulnerabilities.filter(v => v.severity === 'critical').length,
+          high: processedVulnerabilities.filter(v => v.severity === 'high').length,
+          medium: processedVulnerabilities.filter(v => v.severity === 'medium').length,
+          low: processedVulnerabilities.filter(v => v.severity === 'low').length,
+          info: processedVulnerabilities.filter(v => v.severity === 'info').length
+        }
+
+        const report: VulnerabilityReport = {
+          summary: validatedReport.summary || `Found ${stats.total} potential vulnerabilities.`,
+          vulnerabilities: processedVulnerabilities,
+          statistics: stats,
           generatedAt: new Date().toISOString()
         }
-      }
 
-      if (error instanceof z.ZodError) {
-        // Zod v3 uses .issues, newer might use .errors. Use any for safety.
-        const issues = (error as any).issues || (error as any).errors || []
-        console.error(`Cluster ${clusterIndex + 1} Zod validation error:`, JSON.stringify(issues, null, 2))
-        throw new Error(`Invalid response format from AI in cluster ${clusterIndex + 1}: ${issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
-      }
-      if (error instanceof SyntaxError) {
-        console.error(`Cluster ${clusterIndex + 1} JSON parse error:`, error.message)
-        throw new Error(`Failed to parse JSON from cluster ${clusterIndex + 1}: ${error.message}`)
-      }
-      console.error(`Cluster ${clusterIndex + 1} error:`, error)
-      throw error
+        // Successful request, release the key
+        this.keyManager.releaseKey(leasedKey.index)
+        return report
+
+    } catch (error: any) {
+        // Handle Rate Limit (429) OR Payload Too Large (413) gracefully
+        const isRateLimit = error?.status === 429 || error?.code === 'rate_limit_exceeded' || error?.message?.includes('rate limit')
+        const isPayloadTooLarge = error?.status === 413 || error?.message?.includes('too large')
+        
+        if (isRateLimit) {
+          console.error(`[Agent] Rate limit exceeded for key #${leasedKey.index + 1}. Marking as cooling down.`)
+          this.keyManager.markCooldown(leasedKey.index, 3600000) // 1 hour cooldown as requested
+          throw new Error(`API Key #${leasedKey.index + 1} exhausted. Rate limit hit.`)
+        }
+
+        if (isPayloadTooLarge) {
+          console.warn(`[Agent] Payload size limit exceeded for key #${leasedKey.index + 1}.`)
+          this.keyManager.releaseKey(leasedKey.index)
+          this.downgradeModel() // Prepare for next cluster
+          throw new Error(`Payload too large for API Key #${leasedKey.index + 1}.`)
+        }
+
+        // For any other error, release the key and throw
+        this.keyManager.releaseKey(leasedKey.index)
+
+        if (error instanceof z.ZodError) {
+          const issues = (error as any).issues || (error as any).errors || []
+          console.error(`Cluster ${clusterIndex + 1} Zod validation error:`, JSON.stringify(issues, null, 2))
+          throw new Error(`Invalid response format from AI in cluster ${clusterIndex + 1}: ${issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
+        }
+        if (error instanceof SyntaxError) {
+          console.error(`Cluster ${clusterIndex + 1} JSON parse error:`, error.message)
+          throw new Error(`Failed to parse JSON from cluster ${clusterIndex + 1}: ${error.message}`)
+        }
+        throw error
     }
   }
 
@@ -672,35 +672,55 @@ export class VulnerabilityAgent {
    * Analyzes crawled data in clusters to avoid payload size limits
    */
   async analyzeForVulnerabilities(
-    crawledData: CrawledDataSummary
+    crawledData: CrawledDataSummary,
+    onQuotaExhausted?: (exhausted: boolean) => void
   ): Promise<VulnerabilityReport> {
     try {
-      // Create clusters from the crawled data
       const clusters = this.createDataClusters(crawledData)
-      console.log(`Starting clustered analysis with ${clusters.length} cluster(s)...`)
+      const numKeys = this.clients.length
+      console.log(`Starting parallel analysis: ${clusters.length} clusters across ${numKeys} keys...`)
 
-      // Analyze each cluster
+      // Use a worker pool pattern for parallel analysis with global key leasing
+      const workerCount = Math.min(this.keyManager.totalKeys, clusters.length)
       const clusterReports: VulnerabilityReport[] = []
-      for (let i = 0; i < clusters.length; i++) {
-        const clusterReport = await this.analyzeDataCluster(clusters[i], i, clusters.length)
-        clusterReports.push(clusterReport)
+      const queue = [...clusters]
+      
+      console.log(`Launching ${workerCount} parallel workers for ${clusters.length} clusters...`)
 
-        // Small delay between requests to avoid rate limiting
-        if (i < clusters.length - 1) {
+      const workerPromises = Array.from({ length: workerCount }, async (_, workerIndex) => {
+        // Stagger startup to avoid initial burst across all keys
+        await new Promise(resolve => setTimeout(resolve, workerIndex * 1500))
+        
+        while (queue.length > 0) {
+          const cluster = queue.shift()
+          if (!cluster) break
+          
+          const clusterIndex = clusters.indexOf(cluster)
+          console.log(`[Worker ${workerIndex + 1}] Processing cluster ${clusterIndex + 1}/${clusters.length}...`)
+          
+          try {
+            const result = await this.analyzeDataCluster(cluster, clusterIndex, clusters.length, onQuotaExhausted)
+            clusterReports.push(result)
+          } catch (err) {
+            console.error(`[Worker ${workerIndex + 1}] Failed to analyze cluster ${clusterIndex + 1}:`, err)
+          }
+          
+          // Breathing room between clusters on the same worker
           await new Promise(resolve => setTimeout(resolve, 1000))
         }
-      }
+      })
 
-      // Merge all cluster reports into a final comprehensive report
-      console.log('Merging cluster analysis results...')
+      await Promise.all(workerPromises)
+
+      console.log('Merging parallel analysis results...')
       const mergedReport = this.mergeVulnerabilityReports(clusterReports)
 
       console.log(`Final report: ${mergedReport.statistics.total} vulnerabilities found`)
       return mergedReport
     } catch (error) {
       if (error instanceof z.ZodError) {
-        console.error('Zod validation error:', JSON.stringify(error.errors, null, 2))
-        throw new Error(`Invalid response format from AI: ${error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
+        console.error('Zod validation error:', JSON.stringify(error.issues, null, 2))
+        throw new Error(`Invalid response format from AI: ${error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
       }
       if (error instanceof SyntaxError) {
         console.error('JSON parse error:', error.message)
@@ -784,9 +804,9 @@ export class VulnerabilityAgent {
   async generateFullReport(
     selectedVulnerabilities: Vulnerability[],
     crawledData: CrawledDataSummary,
-    targetUrl: string
+    targetUrl: string,
+    onQuotaExhausted?: (exhausted: boolean) => void
   ): Promise<FullReport> {
-    // CRITICAL: Enrich vulnerabilities first to ensure metadata is present
     const enrichedVulnerabilities = selectedVulnerabilities.map(v => this.enrichVulnerability(v))
     console.log(`[Agent] Enriched ${enrichedVulnerabilities.length} vulnerabilities for report generation`)
     
@@ -797,111 +817,108 @@ export class VulnerabilityAgent {
         targetUrl
       )
 
-      try {
-        const message = await this.client.chat.completions.create({
-          model: this.model,
-          messages: [
-            {
-              role: 'system',
-              content: `You are a professional penetration tester writing formal security reports. You MUST respond with ONLY valid JSON wrapped in <report> tags.
-              
-CRITICAL OUTPUT FORMAT:
-<report>
-{
-  "title": "Security Assessment Report",
-  "executive_summary": "2-3 paragraph summary...",
-  "vulnerabilities": [
-    {
-      "id": "vuln_001",
-      "title": "Vulnerability Title",
-      "severity": "high",
-      "type": "XSS",
-      "description": "Details...",
-      "location": "https://example.com",
-      "recommendation": "Fix by...",
-      "affectedAssets": ["url1", "url2"]
-    }
-  ],
-  "statistics": {
-    "total": 1,
-    "critical": 0,
-    "high": 1,
-    "medium": 0,
-    "low": 0
-  },
-  "methodology": "Testing methodology description...",
-  "recommendations": [
-    "Priority 1: Critical fixes...",
-    "Priority 2: Defense in depth..."
-  ],
-  "generatedAt": "ISO date string"
-}
-</report>`
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.2,
-          max_tokens: 8000
-        })
-        
-        const content = message.choices[0]?.message?.content || ''
-        const jsonMatch = content.match(/<report>([\s\S]*?)<\/report>/) || content.match(/\{[\s\S]*\}/)
-        
-        if (!jsonMatch) {
-          throw new Error('Invalid response format')
-        }
-        
-        const aiReport = JSON.parse(jsonMatch[1] || jsonMatch[0])
-        
-        // CRITICAL: Merge enriched metadata back into AI's vulnerabilities
-        // The AI rewrites vulnerabilities and loses cwe/cvss/references
-        // We need to match by title and restore the metadata
-        if (aiReport.vulnerabilities && Array.isArray(aiReport.vulnerabilities)) {
-          aiReport.vulnerabilities = aiReport.vulnerabilities.map((aiVuln: any) => {
-            // Find matching enriched vulnerability by title
-            const enriched = vulnerabilities.find(v => 
-              v.title.toLowerCase() === aiVuln.title?.toLowerCase()
-            )
-            
-            if (enriched) {
-              // Merge enriched metadata into AI's vulnerability
-              return {
-                ...aiVuln,
-                cwe: enriched.cwe,
-                cvss: enriched.cvss,
-                references: enriched.references
+      const leasedKey = await this.keyManager.leaseKey()
+      
+      if (!leasedKey) {
+        console.warn(`[Agent] No healthy keys available for report. Stopping.`)
+        if (onQuotaExhausted) onQuotaExhausted(true)
+        throw new Error('API quota exhausted. All keys are on cooldown.')
+      }
+
+      if (onQuotaExhausted) onQuotaExhausted(false)
+
+        try {
+          console.log(`[Agent] Generating report (Key #${leasedKey.index + 1})...`)
+          const message = await leasedKey.client.chat.completions.create({
+            model: this.model,
+            messages: [
+              {
+                role: 'system',
+                content: `You are a professional penetration tester writing formal security reports. You MUST respond with ONLY valid JSON wrapped in <report> tags.`
+              },
+              {
+                role: 'user',
+                content: prompt
               }
-            }
-            
-            return aiVuln
+            ],
+            temperature: 0.2,
+            max_tokens: 8000
           })
           
-          console.log('[Agent] Merged enriched metadata into AI report vulnerabilities')
-        }
-        
-        return aiReport
-      } catch (error: any) {
-        // Handle Rate Limit (413 or 429) by truncating data
-        if (allowFallback && (error?.status === 413 || error?.code === 'rate_limit_exceeded')) {
-          console.warn('[Agent] Rate limit exceeded, retrying with truncated payload...')
-          // Take only top 5 vulnerabilities by severity
-          const topVulns = vulnerabilities
-            .sort((a, b) => {
-              const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 }
-              return severityOrder[a.severity] - severityOrder[b.severity]
-            })
-            .slice(0, 5)
-            
-          return generate(topVulns, false)
-        }
-        throw error
+          const content = message.choices[0]?.message?.content || ''
+          const jsonMatch = content.match(/<report>([\s\S]*?)<\/report>/) || content.match(/\{[\s\S]*\}/)
+          
+          if (!jsonMatch) {
+            this.keyManager.releaseKey(leasedKey.index)
+            throw new Error('Invalid response format from AI')
+          }
+          
+          const jsonStr = jsonMatch[1] || jsonMatch[0]
+          const parsed = JSON.parse(jsonStr)
+          const validated = FullReportSchema.parse(parsed)
+          
+          this.keyManager.releaseKey(leasedKey.index)
+          
+          return {
+            ...validated,
+            generatedAt: new Date().toISOString()
+          }
+        } catch (error: any) {
+          const isRateLimit = error?.status === 429 || error?.code === 'rate_limit_exceeded' || error?.message?.includes('rate limit')
+          const isPayloadTooLarge = error?.status === 413 || error?.message?.includes('too large')
+
+          if (isRateLimit) {
+            console.error(`[Agent] Rate limit exceeded for key #${leasedKey.index + 1} during report generation.`)
+            this.keyManager.markCooldown(leasedKey.index, 3600000) // 1 hour cooldown
+            throw new Error(`API Key #${leasedKey.index + 1} exhausted during report generation.`)
+          }
+
+          if (isPayloadTooLarge) {
+            console.warn(`[Agent] Payload size limit exceeded for key #${leasedKey.index + 1} during report generation.`)
+            this.keyManager.releaseKey(leasedKey.index)
+            this.downgradeModel()
+            throw new Error(`Payload too large during report generation.`)
+          }
+
+          this.keyManager.releaseKey(leasedKey.index)
+          
+          if (allowFallback) {
+            console.error('[Agent] Final report generation failed, using simplified fallback', error)
+            return this.generateSimplifiedReport(vulnerabilities, targetUrl)
+          }
+          throw error
       }
     }
 
     return generate(enrichedVulnerabilities, true)
+  }
+
+  /**
+   * Generates a simplified report when AI generation fails
+   */
+  private generateSimplifiedReport(vulnerabilities: Vulnerability[], targetUrl: string): FullReport {
+    const stats = {
+      total: vulnerabilities.length,
+      critical: vulnerabilities.filter(v => v.severity === 'critical').length,
+      high: vulnerabilities.filter(v => v.severity === 'high').length,
+      medium: vulnerabilities.filter(v => v.severity === 'medium').length,
+      low: vulnerabilities.filter(v => v.severity === 'low').length,
+      info: vulnerabilities.filter(v => v.severity === 'info').length
+    }
+
+    return {
+      title: `Security Assessment Report for ${targetUrl}`,
+      executive_summary: `This is an automatically generated summary of the security assessment conducted on ${targetUrl}. The scan identified ${vulnerabilities.length} vulnerabilities.`,
+      vulnerabilities,
+      statistics: stats,
+      methodology: "Automated vulnerability scan and analysis.",
+      recommendations: [
+        "Address all critical and high-severity findings immediately.",
+        "Implement a regular security scanning cadence.",
+        "Review and harden server configurations."
+      ],
+      generatedAt: new Date().toISOString()
+    }
   }
 
 
@@ -938,79 +955,35 @@ CRITICAL OUTPUT FORMAT:
       responseStatus: c.responseStatus
     }))
 
-    // Limit context data
+    // Aggressively limit context data if it's too large
     const summarizedAssets = {
-      js: (data.allAssets?.['js'] || []).slice(0, 50),
-      css: (data.allAssets?.['css'] || []).slice(0, 20),
-      images: (data.allAssets?.['images'] || []).length + ' images found'
+      js: (data.allAssets?.['js'] || []).slice(0, 5),
+      css: (data.allAssets?.['css'] || []).slice(0, 3),
+      images: (data.allAssets?.['images'] || []).length + ' images'
     }
 
-    return `You are a professional penetration tester and security analyst. Analyze the following web application crawl data and identify security vulnerabilities.${clusterInfo}
-CRAWLED DATA SUMMARY:
-- URLs in this batch: ${data.crawlResults.length}
-- API endpoints in this batch: ${data.allApiCalls.length}
-- Forms discovered: ${data.crawlResults.reduce((sum, r) => sum + r.forms.length, 0)}
-- Cookies analyzed: ${data.allCookies.length}
-- Emails discovered: ${data.allEmails.length}
-- Unique domains: ${data.discoveredDomains.length}
+    return `You are an expert security analyst. Analyze this web application crawl data segment for vulnerabilities.${clusterInfo}
+Batch Stats: Pages: ${data.crawlResults.length}, APIs: ${data.allApiCalls.length}, Forms: ${data.crawlResults.reduce((sum, r) => sum + (r.forms?.length || 0), 0)}
 
-DETAILED DATA - PAGES & FORMS (Summarized):
-${JSON.stringify(summarizedCrawl, null, 2)}
+DATA (JSON):
+${JSON.stringify({
+  pages: summarizedCrawl,
+  apis: summarizedApi,
+  cookies: data.allCookies.slice(0, 5),
+  assets: summarizedAssets
+}, null, 0)}
 
-DETAILED DATA - API ENDPOINTS (Summarized):
-${JSON.stringify(summarizedApi, null, 2)}
+INSTRUCTIONS:
+1. Identify high-confidence vulnerabilities.
+2. Provide technical proof (payload, parameter).
+3. Follow strict JSON format.
 
-REFERENCE DATA - COOKIES (for context):
-${JSON.stringify(data.allCookies, null, 2)}
-
-REFERENCE DATA - EMAILS (for context):
-${JSON.stringify(data.allEmails.slice(0, 50), null, 2)}
-
-REFERENCE DATA - ASSETS (for context, truncated):
-${JSON.stringify(summarizedAssets, null, 2)}
-
-REFERENCE DATA - DOMAINS (for context):
-${JSON.stringify(data.discoveredDomains.slice(0, 50), null, 2)}
-
-${data.fuzzResults ? `REFERENCE DATA - FUZZ RESULTS (for context):
-${JSON.stringify(data.fuzzResults.slice(0, 20), null, 2)}` : ''}
-
-ANALYSIS INSTRUCTIONS:
-Analyze the pages, forms, and API endpoints in this batch:
-1. Forms & Input Validation: Check for XSS, SQL injection, CSRF vulnerabilities
-2. API Security: Analyze endpoints for authentication issues, exposed sensitive data
-3. Cookie Security: Check for missing Secure/HttpOnly flags
-4. Information Disclosure: Identify exposed emails, sensitive files
-5. SSL/TLS Issues: Check for insecure cookies over HTTP
-6. Authentication & Authorization: Weak session management
-7. Data Exposure: Sensitive data in URLs or API responses
-8. Subdomain Takeover: Analyze discovered domains for risks
-9. Asset Security: Check for exposed sensitive files
-10. Security Headers: Missing security headers in API responses
-
-OUTPUT: Wrap JSON in <vulnerability> tags:
+OUTPUT JSON:
 <vulnerability>
 {
-  "summary": "Brief summary of findings",
-  "vulnerabilities": [
-    {
-      "id": "vuln_001",
-      "title": "Vulnerability Title",
-      "severity": "high",
-      "type": "Type",
-      "description": "Description",
-      "location": "https://example.com",
-      "recommendation": "Fix",
-      "affectedAssets": ["url1"]
-    }
-  ],
-  "statistics": {
-    "total": 1,
-    "critical": 0,
-    "high": 1,
-    "medium": 0,
-    "low": 0
-  }
+  "summary": "...",
+  "vulnerabilities": [{"title": "...", "severity": "...", "description": "...", "proof": {...}}],
+  "statistics": {"total": 1, "critical": 0, "high": 1, "medium": 0, "low": 0}
 }
 </vulnerability>
 
@@ -1090,8 +1063,11 @@ IMPORTANT: Output ONLY the JSON wrapped in <report> tags. No other text.`
    * Tests the API connection
    */
   async testConnection(): Promise<boolean> {
+    const leasedKey = await this.keyManager.leaseKey()
+    if (!leasedKey) return false
+
     try {
-      const message = await this.client.chat.completions.create({
+      const message = await leasedKey.client.chat.completions.create({
         model: this.model,
         messages: [
           {
@@ -1101,9 +1077,11 @@ IMPORTANT: Output ONLY the JSON wrapped in <report> tags. No other text.`
         ],
         max_tokens: 10
       })
+      this.keyManager.releaseKey(leasedKey.index)
       return !!message.choices[0]?.message?.content
     } catch (error) {
       console.error('Connection test failed:', error)
+      this.keyManager.releaseKey(leasedKey.index)
       return false
     }
   }

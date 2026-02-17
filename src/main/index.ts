@@ -106,12 +106,14 @@ app.whenReady().then(() => {
     console.log(context);
     const sender = event.sender
 
+    const crawlStartTime = Date.now()
     crawler = new WebCrawler(
       context,
       (currentUrl: string, results: CrawlResult[]) => {
         // Send progress updates to renderer
         sender.send('crawl-progress', {
           currentUrl,
+          duration: Date.now() - crawlStartTime,
           results: results.map((r) => ({
             url: r.url,
             status: r.status,
@@ -140,8 +142,10 @@ app.whenReady().then(() => {
 
     try {
       console.log('start crawl', context)
-      const results = await crawler.crawl(url, 10000)
+      const results = await crawler.crawl(url, 1000, 5) // Increased batch size to 5 for speed
+      const totalDuration = Date.now() - crawlStartTime
       sender.send('crawl-complete', {
+          totalDuration,
           results: results.map((r) => ({
             url: r.url,
             status: r.status,
@@ -153,11 +157,11 @@ app.whenReady().then(() => {
             assets: r.assets,
             error: r.error
           })),
-          domains: crawler.getAllDiscoveredDomains(),
-          allApiCalls: crawler.getAllApiCalls(),
-          allCookies: crawler.getAllCookies(),
-          allEmails: crawler.getAllEmails(),
-          allAssets: crawler.getAllAssets()
+          domains: crawler ? crawler.getAllDiscoveredDomains() : [],
+          allApiCalls: crawler ? crawler.getAllApiCalls() : [],
+          allCookies: crawler ? crawler.getAllCookies() : [],
+          allEmails: crawler ? crawler.getAllEmails() : [],
+          allAssets: crawler ? crawler.getAllAssets() : {}
         })
       return { success: true, results }
     } catch (error) {
@@ -280,7 +284,8 @@ app.whenReady().then(() => {
     console.warn('Failed to initialize VulnerabilityAgent:', error)
   }
 
-  ipcMain.handle('analyze-vulnerabilities', async (_, data: CrawledDataSummary) => {
+  ipcMain.handle('analyze-vulnerabilities', async (event, data: CrawledDataSummary) => {
+    const sender = event.sender
     console.log('[IPC] analyze-vulnerabilities received')
     if (!vulnerabilityAgent) {
       console.log('Initializing VulnerabilityAgent with key:', process.env.GROQ_API_KEY ? 'YES' : 'NO')
@@ -297,10 +302,13 @@ app.whenReady().then(() => {
     }
 
     try {
-      console.log('Calling agent.analyzeForVulnerabilities...')
-      const report = await vulnerabilityAgent.analyzeForVulnerabilities(data)
+      const analysisStartTime = Date.now()
+      const report = await vulnerabilityAgent.analyzeForVulnerabilities(data, (exhausted) => {
+        sender.send('quota-status', { exhausted })
+      })
+      const analysisDuration = Date.now() - analysisStartTime
       console.log('Analysis complete, report:', report ? 'Generated' : 'Null')
-      return { success: true, report }
+      return { success: true, report, analysisDuration }
     } catch (error) {
       console.error('Vulnerability analysis failed:', error)
       return { 
@@ -310,7 +318,8 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('generate-report', async (_, { vulnerabilities, data, url }) => {
+  ipcMain.handle('generate-report', async (event, { vulnerabilities, data, url }) => {
+    const sender = event.sender
     if (!vulnerabilityAgent) {
       return { 
         success: false, 
@@ -319,7 +328,9 @@ app.whenReady().then(() => {
     }
 
     try {
-      const report = await vulnerabilityAgent.generateFullReport(vulnerabilities, data, url)
+      const report = await vulnerabilityAgent.generateFullReport(vulnerabilities, data, url, (exhausted) => {
+        sender.send('quota-status', { exhausted })
+      })
       return { success: true, report }
     } catch (error) {
       console.error('Report generation failed:', error)

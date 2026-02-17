@@ -13,6 +13,8 @@
   export let isAnalyzing = false
   export let scanProgress = 0
   export let analysisProgress = 0
+  export let crawlDuration = 0
+  export let analysisDuration = 0
 
   let selectedUrl = 'https://'
   let mirrorEl
@@ -102,6 +104,14 @@
       onStartScan(urlToScan, { cookies, localStorage })
     }
   }
+
+  function formatDuration(ms) {
+    if (!ms) return '00:00'
+    const totalSeconds = Math.floor(ms / 1000)
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+  }
 </script>
 
 <div class="p-4 border-b border-gray-800">
@@ -109,6 +119,11 @@
     <h1 class="text-base font-medium">Wibe Crawler</h1>
     {#if showResults}
       <div class="flex gap-4 text-xs text-gray-400">
+        {#if isAnalyzing && analysisDuration > 0}
+          <span class="text-purple-400 font-mono">[{formatDuration(analysisDuration)}]</span>
+        {:else if isScanning || crawlDuration > 0}
+          <span class="text-gray-500 font-mono">[{formatDuration(crawlDuration)}]</span>
+        {/if}
         <span>URLs: {totalUrls}</span>
         <span class="text-red-400">Critical: {critical}</span>
         <span class="text-orange-400">High: {high}</span>

@@ -34,6 +34,13 @@
   let formResponse = null
   let isSubmittingForm = false
   let scannedBaseUrl = ''
+  let isQuotaExhausted = false
+
+  // Timing state
+  let crawlDuration = 0
+  let analysisDuration = 0
+  let crawlTimer = null
+  let analysisTimer = null
 
   let vulnerabilities = []
 
@@ -105,8 +112,8 @@
   onMount(() => {
     if (window.api?.crawler) {
       window.api.crawler.onProgress((data) => {
-        console.log('Received progress data:', data) // Debug log
         crawlStatus = `Crawling: ${data.currentUrl}`
+        crawlDuration = data.duration || 0
         fullCrawlResults = data.results
         crawledUrls = data.results.map((r: any) => r.url)
         discoveredDomains = data.domains || []
@@ -124,6 +131,11 @@
 
       window.api.crawler.onComplete((data) => {
         isScanning = false
+        if (crawlTimer) {
+          clearInterval(crawlTimer)
+          crawlTimer = null
+        }
+        crawlDuration = data.totalDuration || crawlDuration
         showResults = true
         crawlStatus = `Completed: ${data.totalUrlsCrawled} URLs crawled`
         fullCrawlResults = data.results
@@ -140,14 +152,27 @@
       window.api.crawler.onError((error) => {
         console.error('Crawler error:', error)
         isScanning = false
+        if (crawlTimer) {
+          clearInterval(crawlTimer)
+          crawlTimer = null
+        }
         crawlStatus = `Error: ${error.message}`
       })
+
+      if (window.api?.analyzer) {
+        window.api.analyzer.onQuotaStatus((data) => {
+          isQuotaExhausted = data.exhausted
+        })
+      }
     }
   })
 
   onDestroy(() => {
     if (window.api?.crawler) {
       window.api.crawler.removeAllListeners()
+    }
+    if (window.api?.analyzer) {
+      window.api.analyzer.removeAllListeners()
     }
   })
 
@@ -156,6 +181,7 @@
     if (!url || isScanning) return
 
     try {
+      isQuotaExhausted = false
       isScanning = true
       showResults = true
       crawledUrls = []
@@ -171,6 +197,12 @@
       reportItems = []
       crawlStatus = 'Starting scan...'
       scannedBaseUrl = url
+      crawlDuration = 0
+
+      const startTime = Date.now()
+      crawlTimer = setInterval(() => {
+        crawlDuration = Date.now() - startTime
+      }, 100)
 
       await window.api.crawler.startCrawl(url, context)
     } catch (error) {
@@ -184,6 +216,10 @@
     try {
       await window.api.crawler.stopCrawl()
       isScanning = false
+      if (crawlTimer) {
+        clearInterval(crawlTimer)
+        crawlTimer = null
+      }
       crawlStatus = 'Scan stopped'
     } catch (error) {
       console.error('Failed to stop scan:', error)
@@ -343,8 +379,15 @@
     }
 
     try {
+      isQuotaExhausted = false
       isAnalyzing = true
+      analysisDuration = 0
       crawlStatus = 'Analyzing crawled data with AI...'
+
+      const startTime = Date.now()
+      analysisTimer = setInterval(() => {
+        analysisDuration = Date.now() - startTime
+      }, 100)
 
       const payload = {
         crawlResults: fullCrawlResults,
@@ -359,6 +402,12 @@
       const response = await window.api.analyzer.analyzeVulnerabilities(payload)
 
       if (response.success && response.report) {
+        if (analysisTimer) {
+          clearInterval(analysisTimer)
+          analysisTimer = null
+        }
+        analysisDuration = response.analysisDuration || analysisDuration
+
         vulnerabilities = response.report.vulnerabilities.map((v) => ({
           id: v.id || Math.random().toString(36).substr(2, 9),
           name: v.title,
@@ -381,6 +430,10 @@
       crawlStatus = 'Analysis failed'
     } finally {
       isAnalyzing = false
+      if (analysisTimer) {
+        clearInterval(analysisTimer)
+        analysisTimer = null
+      }
     }
   }
 </script>
@@ -400,14 +453,35 @@
     {low}
     {scanProgress}
     {analysisProgress}
+    {crawlDuration}
+    {analysisDuration}
     onStartScan={startScan}
     onStopScan={stopScan}
     onAnalyze={analyzeVulnerabilities}
   />
 
+  {#if isQuotaExhausted}
+    <div
+      class="bg-yellow-600/20 border-b border-yellow-500/30 p-2 px-4 flex items-center justify-between"
+    >
+      <div class="flex items-center gap-3">
+        <span class="text-lg animate-pulse">⚠️</span>
+        <div class="flex flex-col">
+          <span class="text-xs font-bold text-yellow-400 uppercase tracking-wider"
+            >AI Quota Exhausted</span
+          >
+          <span class="text-[11px] text-yellow-200/70"
+            >Your API limits have been reached. Analysis has stopped for this session. Please wait
+            for your daily quota to reset or provide more keys.</span
+          >
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <div class="flex-1 flex overflow-hidden">
     <!-- Main Content Area -->
-    <div class="flex-1 p-3 overflow-y-auto">
+    <div class="flex-1 p-3 overflow-hidden">
       {#if !showResults}
         <EmptyState />
       {:else}

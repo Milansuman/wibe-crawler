@@ -33,6 +33,8 @@ interface FuzzerAPI {
 interface AnalyzerAPI {
   analyzeVulnerabilities: (data: any) => Promise<any>
   generateReport: (data: any) => Promise<any>
+  onQuotaStatus: (callback: (data: { exhausted: boolean }) => void) => void
+  removeAllListeners: () => void
 }
 
 declare global {
