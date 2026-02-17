@@ -15,6 +15,7 @@
   export let analysisProgress = 0
   export let crawlDuration = 0
   export let analysisDuration = 0
+  export let isLandingPageError = false
 
   let selectedUrl = 'https://'
   let mirrorEl
@@ -209,7 +210,7 @@
         Scan
       {/if}
     </button>
-    {#if showResults && !isScanning}
+    {#if showResults && !isScanning && !isLandingPageError}
       <button
         on:click={onAnalyze}
         disabled={isAnalyzing}

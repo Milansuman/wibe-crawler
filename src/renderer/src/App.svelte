@@ -35,6 +35,7 @@
   let isSubmittingForm = false
   let scannedBaseUrl = ''
   let isQuotaExhausted = false
+  let isLandingPageError = false
 
   // Timing state
   let crawlDuration = 0
@@ -130,11 +131,38 @@
       })
 
       window.api.crawler.onComplete((data) => {
-        isScanning = false
         if (crawlTimer) {
           clearInterval(crawlTimer)
           crawlTimer = null
         }
+
+        // Detect if landing page failed (status 0 or has explicit error)
+        // Only set error state if we were actively scanning (prevents late events from old scans)
+        console.log('[UI] onComplete fired', {
+          isScanning,
+          scannedBaseUrl,
+          resultsCount: data.results.length,
+          firstResult: data.results[0]
+            ? {
+                url: data.results[0].url,
+                status: data.results[0].status,
+                error: data.results[0].error
+              }
+            : null
+        })
+
+        if (isScanning) {
+          // Show error ONLY if we have no results, or exactly 1 result that failed
+          // If we have multiple results, the scan succeeded (even if first entry is a failed attempt)
+          const hasFailed =
+            data.results.length === 0 ||
+            (data.results.length === 1 && (data.results[0].status === 0 || data.results[0].error))
+
+          isLandingPageError = hasFailed
+          console.log(`[UI] Setting isLandingPageError = ${isLandingPageError}`)
+        }
+
+        isScanning = false
         crawlDuration = data.totalDuration || crawlDuration
         showResults = true
         crawlStatus = `Completed: ${data.totalUrlsCrawled} URLs crawled`
@@ -182,6 +210,7 @@
 
     try {
       isQuotaExhausted = false
+      isLandingPageError = false
       isScanning = true
       showResults = true
       crawledUrls = []
@@ -455,6 +484,7 @@
     {analysisProgress}
     {crawlDuration}
     {analysisDuration}
+    {isLandingPageError}
     onStartScan={startScan}
     onStopScan={stopScan}
     onAnalyze={analyzeVulnerabilities}
@@ -498,6 +528,33 @@
             emailsCount={allEmails.length}
             onTabChange={handleTabChange}
           />
+
+          <!-- Landing Page Error Banner -->
+          {#if isLandingPageError && !isScanning}
+            <div
+              class="mt-3 mb-4 p-4 bg-red-950/30 border-l-4 border-red-500 border border-red-900/50 flex items-start gap-3"
+            >
+              <div class="text-2xl shrink-0">❌</div>
+              <div class="flex-1 min-w-0">
+                <h3 class="text-sm font-semibold text-red-300 mb-1">
+                  Target Website Failed to Load
+                </h3>
+                <p class="text-xs text-red-200/80 leading-relaxed mb-2">
+                  The scanner was unable to establish a connection with the target URL after
+                  multiple attempts. Please check if the website is online and accessible.
+                </p>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-gray-500">URL:</span>
+                  <a
+                    href={scannedBaseUrl}
+                    target="_blank"
+                    class="text-xs text-blue-400 hover:text-blue-300 underline break-all font-mono"
+                    >{scannedBaseUrl}</a
+                  >
+                </div>
+              </div>
+            </div>
+          {/if}
 
           <!-- Rate Limit Warning Banner -->
           {#if vulnerabilities.some((v) => v.id === 'rate_limit_exceeded')}
