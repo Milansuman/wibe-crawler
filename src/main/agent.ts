@@ -45,14 +45,7 @@ const VulnerabilityReportSchema = z.object({
   statistics: StatisticsSchema.optional()
 })
 
-const FullReportSchema = z.object({
-  title: z.string(),
-  executive_summary: z.string(),
-  vulnerabilities: z.array(VulnerabilitySchema),
-  statistics: StatisticsSchema,
-  methodology: z.string(),
-  recommendations: z.array(z.string())
-})
+
 
 export interface Vulnerability {
   id: string
@@ -140,7 +133,97 @@ interface FilteredCrawledData {
   }
 }
 
+/**
+ * API Key Pool Manager
+ * Handles multiple API keys with automatic rotation on rate limits
+ */
+class ApiKeyPool {
+  private keys: string[]
+  private currentIndex: number = 0
+  private rateLimitedKeys: Map<string, number> = new Map() // key -> timestamp when rate limited
+  private readonly RATE_LIMIT_COOLDOWN = 60 * 60 * 1000 // 1 hour in ms
+
+  constructor(apiKeys: string | undefined) {
+    if (!apiKeys) {
+      throw new Error('No API keys provided')
+    }
+
+    // Parse comma-separated keys
+    this.keys = apiKeys.split(',').map(k => k.trim()).filter(k => k.length > 0)
+    
+    if (this.keys.length === 0) {
+      throw new Error('No valid API keys found')
+    }
+
+    console.log(`[ApiKeyPool] Initialized with ${this.keys.length} API key(s)`)
+  }
+
+  /**
+   * Get the next available API key
+   */
+  getNextKey(): string {
+    const now = Date.now()
+    let attempts = 0
+
+    // Try to find a non-rate-limited key
+    while (attempts < this.keys.length) {
+      const key = this.keys[this.currentIndex]
+      const rateLimitedAt = this.rateLimitedKeys.get(key)
+
+      // Check if key is available (not rate limited or cooldown expired)
+      if (!rateLimitedAt || (now - rateLimitedAt) > this.RATE_LIMIT_COOLDOWN) {
+        // Clear from rate limited map if cooldown expired
+        if (rateLimitedAt && (now - rateLimitedAt) > this.RATE_LIMIT_COOLDOWN) {
+          this.rateLimitedKeys.delete(key)
+          console.log(`[ApiKeyPool] Key #${this.currentIndex + 1} cooldown expired, now available`)
+        }
+
+        const keyPreview = `${key.substring(0, 10)}...`
+        console.log(`[ApiKeyPool] Using key #${this.currentIndex + 1}/${this.keys.length} (${keyPreview})`)
+        
+        // Move to next key for next call (round-robin)
+        this.currentIndex = (this.currentIndex + 1) % this.keys.length
+        
+        return key
+      }
+
+      // Try next key
+      this.currentIndex = (this.currentIndex + 1) % this.keys.length
+      attempts++
+    }
+
+    // All keys are rate limited
+    const availableIn = Math.min(...Array.from(this.rateLimitedKeys.values()).map(t => this.RATE_LIMIT_COOLDOWN - (now - t)))
+    throw new Error(`All ${this.keys.length} API keys are rate limited. Next key available in ${Math.ceil(availableIn / 1000 / 60)} minutes.`)
+  }
+
+  /**
+   * Mark a key as rate limited
+   */
+  markRateLimited(key: string): void {
+    const now = Date.now()
+    this.rateLimitedKeys.set(key, now)
+    
+    const keyIndex = this.keys.indexOf(key)
+    const keyPreview = `${key.substring(0, 10)}...`
+    console.warn(`[ApiKeyPool] Key #${keyIndex + 1} (${keyPreview}) hit rate limit`)
+    console.log(`[ApiKeyPool] ${this.getAvailableKeyCount()}/${this.keys.length} keys still available`)
+  }
+
+  /**
+   * Get number of available (non-rate-limited) keys
+   */
+  getAvailableKeyCount(): number {
+    const now = Date.now()
+    return this.keys.filter(key => {
+      const rateLimitedAt = this.rateLimitedKeys.get(key)
+      return !rateLimitedAt || (now - rateLimitedAt) > this.RATE_LIMIT_COOLDOWN
+    }).length
+  }
+}
+
 export class VulnerabilityAgent {
+  private keyPool: ApiKeyPool
   private client: Groq
   private model: string = 'llama-3.3-70b-versatile'
 
@@ -161,8 +244,9 @@ export class VulnerabilityAgent {
           const match = envContent.match(/^GROQ_API_KEY=(.*)$/m)
           if (match && match[1]) {
             const fileKey = match[1].trim()
-            if (fileKey && fileKey.startsWith('gsk_')) {
-              console.log('[Agent] Found valid key in .env file, overriding system env var')
+            // Support both single key and comma-separated keys
+            if (fileKey && (fileKey.startsWith('gsk_') || fileKey.includes(','))) {
+              console.log('[Agent] Found key(s) in .env file, overriding system env var')
               key = fileKey
               process.env.GROQ_API_KEY = fileKey // Update process.env for subsequent calls
             }
@@ -176,10 +260,15 @@ export class VulnerabilityAgent {
     if (!key) {
       throw new Error('GROQ_API_KEY environment variable is not set or invalid')
     }
+    
     this.model = model
-
+    
+    // Initialize API key pool (supports single or multiple keys)
+    this.keyPool = new ApiKeyPool(key)
+    
+    // Initialize client with first key
     this.client = new Groq({
-      apiKey: key
+      apiKey: this.keyPool.getNextKey()
     })
   }
 
@@ -191,18 +280,70 @@ export class VulnerabilityAgent {
   }
 
   /**
+   * Makes an API call with automatic key rotation on rate limits
+   * @param makeRequest Function that creates the API request using this.client
+   * @returns API response
+   */
+  private async callWithRetry<T>(makeRequest: () => Promise<T>): Promise<T> {
+    const maxAttempts = this.keyPool.getAvailableKeyCount() || 1
+    let lastError: any
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await makeRequest()
+      } catch (error: any) {
+        lastError = error
+
+        // Check if it's a rate limit error (429 or specific error codes)
+        const isRateLimit = 
+          error?.status === 429 || 
+          error?.code === 'rate_limit_exceeded' ||
+          error?.error?.message?.includes('rate limit') ||
+          error?.message?.includes('rate limit')
+
+        if (isRateLimit && attempt < maxAttempts - 1) {
+          console.warn(`[Agent] Rate limit hit, rotating to next API key...`)
+          
+          try {
+            // Mark current key as rate limited
+            const currentKey = this.client.apiKey
+            if (currentKey) {
+              this.keyPool.markRateLimited(currentKey)
+            }
+
+            // Get next available key and reinitialize client
+            const nextKey = this.keyPool.getNextKey()
+            this.client = new Groq({ apiKey: nextKey })
+            
+            console.log(`[Agent] Retrying with new key (attempt ${attempt + 2}/${maxAttempts})...`)
+            continue
+          } catch (poolError: any) {
+            console.error('[Agent] Failed to rotate key:', poolError.message)
+            throw poolError
+          }
+        }
+
+        // If not a rate limit or no more keys, throw the error
+        throw error
+      }
+    }
+
+    throw lastError
+  }
+
+  /**
    * Filters and samples crawled data to keep request size manageable
    * Removes duplicates and limits arrays to most important items
    */
   private filterCrawledData(data: CrawledDataSummary): FilteredCrawledData {
-    // Drastically reduced limits to prevent token overflow (was hitting 34k, limit is 12k)
-    const MAX_CRAWL_RESULTS = 5      // Reduced from 30
-    const MAX_API_CALLS = 15         // Reduced from 50  
-    const MAX_COOKIES = 15           // Reduced from 30
-    const MAX_EMAILS = 20            // Reduced from 50
-    const MAX_DOMAINS = 20           // Reduced from 50
-    const MAX_FUZZ_RESULTS = 10      // Reduced from 30
-    const MAX_ASSETS_PER_TYPE = 5    // Reduced from 10
+    // Maximized limits for comprehensive vulnerability detection
+    const MAX_CRAWL_RESULTS = 30
+    const MAX_API_CALLS = 50
+    const MAX_COOKIES = 30
+    const MAX_EMAILS = 50
+    const MAX_DOMAINS = 50
+    const MAX_FUZZ_RESULTS = 50
+    const MAX_ASSETS_PER_TYPE = 20
 
     const originalCounts = {
       crawlResults: data.crawlResults.length,
@@ -215,7 +356,27 @@ export class VulnerabilityAgent {
     }
 
     // Filter crawl results - keep most important (those with forms or suspicious patterns)
+    // SMART DEDUPLICATION: Allow up to 3 variations of query params per endpoint to detect IDOR
+    const seenPathsCount = new Map<string, number>()
     const filteredCrawlResults = data.crawlResults
+      .filter(r => {
+        // Skip static assets that might have slipped in
+        if (r.url.match(/\.(css|jpg|jpeg|png|gif|svg|woff|woff2|ttf|eot|ico)$/i)) return false
+        
+        let path = r.url
+        try {
+          const u = new URL(r.url)
+          path = u.origin + u.pathname
+        } catch {
+          path = r.url.split('?')[0].split('#')[0]
+        }
+
+        const count = seenPathsCount.get(path) || 0
+        if (count >= 3) return false // Max 3 variations per endpoint
+        
+        seenPathsCount.set(path, count + 1)
+        return true
+      })
       .sort((a, b) => {
         // Prioritize URLs with forms, suspicious paths, or auth-related pages
         const aScore = (a.forms?.length || 0) * 100 + (a.url.includes('admin') || a.url.includes('login') ? 50 : 0)
@@ -228,7 +389,11 @@ export class VulnerabilityAgent {
     const seenApiEndpoints = new Set<string>()
     const filteredApiCalls = data.allApiCalls
       .filter(call => {
-        const endpoint = `${call.method}:${call.url}`
+        // For API calls, strict deduplication by normalized endpoint makes sense
+        // unless they use query params for routing
+        const normalizedUrl = this.normalizeUrl(call.endpoint)
+        const endpoint = `${call.method}:${normalizedUrl}`
+        
         if (seenApiEndpoints.has(endpoint)) return false
         seenApiEndpoints.add(endpoint)
         return true
@@ -259,10 +424,10 @@ export class VulnerabilityAgent {
       filteredAssets[type] = uniqueAssets.slice(0, MAX_ASSETS_PER_TYPE)
     }
 
-    // Filter fuzz results - keep interesting ones (non-404s)
+    // Filter fuzz results - check if fuzzResults exists and has items
     const filteredFuzzResults = data.fuzzResults
-      ?.filter(result => result.statusCode && result.statusCode !== 404)
-      .slice(0, MAX_FUZZ_RESULTS)
+      ? data.fuzzResults.slice(0, MAX_FUZZ_RESULTS) 
+      : []
 
     const dataWasFiltered =
       originalCounts.crawlResults > MAX_CRAWL_RESULTS ||
@@ -284,6 +449,22 @@ export class VulnerabilityAgent {
       originalCounts
     }
   }
+
+  /**
+   * Helper to normalize URLs for deduplication
+   * Preserves query parameter KEYS (not values) to detect IDOR patterns
+   */
+  private normalizeUrl(url: string): string {
+    try {
+      const u = new URL(url)
+      const paramKeys = Array.from(u.searchParams.keys()).sort().join(',')
+      return u.origin + u.pathname + (paramKeys ? `?${paramKeys}` : '')
+    } catch {
+      return url.split('#')[0]
+    }
+  }
+
+
 
   /**
    * Extracts JSON from AI response using multiple strategies
@@ -325,13 +506,13 @@ export class VulnerabilityAgent {
     const clusters: CrawledDataSummary[] = []
 
     // Split crawl results into clusters
-    const crawlClusters = []
+    const crawlClusters: CrawlResult[][] = []
     for (let i = 0; i < data.crawlResults.length; i += CLUSTER_SIZE) {
       crawlClusters.push(data.crawlResults.slice(i, i + CLUSTER_SIZE))
     }
 
     // Split API calls into clusters
-    const apiClusters = []
+    const apiClusters: ApiCall[][] = []
     for (let i = 0; i < data.allApiCalls.length; i += CLUSTER_SIZE) {
       apiClusters.push(data.allApiCalls.slice(i, i + CLUSTER_SIZE))
     }
@@ -369,12 +550,18 @@ export class VulnerabilityAgent {
     try {
       console.log(`Analyzing cluster ${clusterIndex + 1}/${totalClusters}...`)
       
-      const message = await this.client.chat.completions.create({
-        model: this.model, // Use the instance model which defaults to llama-3.3-70b-versatile
-        messages: [
+      const message = await this.callWithRetry(() => 
+        this.client.chat.completions.create({
+          model: this.model, // Use the instance model which defaults to llama-3.3-70b-versatile
+          messages: [
           {
             role: 'system',
             content: `You are an expert penetration tester and security auditor conducting an authorized security assessment.
+            Analyze the provided web crawl data for potential security vulnerabilities.
+            
+            CRITICAL: You MUST provide CONCRETE PROOF for each vulnerability. Do NOT use vague language like "may be vulnerable" or "potential".
+            Instead, extract ACTUAL EVIDENCE from the crawl data.
+            
             Analyze the provided web crawl data for potential security vulnerabilities.
             
             CRITICAL: You MUST provide CONCRETE PROOF for each vulnerability. Do NOT use vague language like "may be vulnerable" or "potential".
@@ -391,12 +578,18 @@ export class VulnerabilityAgent {
                ✅ "Missing Security Headers"
                ✅ "Information Disclosure"
                ✅ "Authentication Bypass"
+               ✅ "Improper Access Control"
+               ✅ "Security Misconfiguration"
+               ✅ "HTTP Parameter Pollution"
+               ✅ "Server-Side Request Forgery (SSRF)"
+               ✅ "Broken Access Control"
+               ✅ "Cryptographic Failure"
                ❌ NO: "Potential SQL Injection", "SQL Injection Vulnerability", "Possible XSS"
             
             2. SEVERITY MAPPING (fixed, non-negotiable):
-               - HIGH: SQL Injection, Stored XSS, Authentication Bypass, Remote Code Execution
-               - MEDIUM: Reflected XSS, IDOR, CSRF, Missing Security Headers
-               - LOW: Information Disclosure (minor), Insecure Cookies, Version Disclosure
+               - HIGH: SQL Injection, Stored XSS, Authentication Bypass, Remote Code Execution, XXE, SSRF
+               - MEDIUM: Reflected XSS, IDOR, CSRF, Security Misconfiguration, Improper Access Control
+               - LOW: Information Disclosure (minor), Insecure Cookies, Version Disclosure, Missing Security Headers
                - INFO: Best practice violations, recommendations
             
             3. NO DUPLICATES - If same vulnerability type found multiple times:
@@ -432,7 +625,34 @@ export class VulnerabilityAgent {
             - response: A snippet of the actual HTTP response proving the issue (error messages, reflected input, etc.)
             - confidence: "High" (confirmed with evidence), "Medium" (strong indicators), or "Low" (theoretical)
             
-            EXAMPLE of GOOD output (with proof & metadata):
+            HOW TO IDENTIFY SPECIFIC VULNERABILITIES:
+
+            1. Improper Access Control / IDOR:
+               - Look for endpoints with IDs (e.g., /user/123, /order/999) that are accessible without auth or by other users.
+               - Check for 200 OK responses on sensitive paths (e.g., /admin, /config) that should be 403/401.
+
+            2. Security Misconfiguration:
+               - Check for default error pages (Stack traces, Tomcat/Apache default pages).
+               - Check for missing security headers (CSP, HSTS, X-Frame-Options) in API responses.
+               - Look for accessible backup files (.bak, .old) or config files (.env, .git).
+
+            3. HTTP Parameter Pollution:
+               - Look for multiple parameters with the same name (e.g., ?id=1&id=2).
+               - Check if adding a second parameter modifies behavior or bypasses filters.
+
+            4. SQL Injection (SQLi):
+               - Look for database error messages (MySQL, PostgreSQL, Oracle) in response bodies.
+               - Check for behavioral changes when signs/quotes are added to parameters.
+
+            5. Cross-Site Scripting (XSS):
+               - Check if input parameters are reflected in the response HTML without encoding.
+               - Look for JavaScript contexts where user input is inserted.
+
+            6. Sensitive Data Exposure:
+               - PII (Emails, Phones, SSN) in responses.
+               - API Keys, Tokens, or Credentials in JS files or comments.
+
+            Example of GOOD output (with proof & metadata):
             {
               "title": "SQL Injection (SQLi)",
               "severity": "high",
@@ -464,6 +684,7 @@ export class VulnerabilityAgent {
             2. Check "apiCalls" for request/response data → extract method, URL, status
             3. Check page content/"html" for error messages or sensitive data exposure
             4. Look for patterns: SQL errors, XSS reflection, directory listings, exposed credentials
+            5. Check "fuzzResults" array for CONFIRMED vulnerabilities found by active probing (SQLi, XSS, Path Traversal)
             
             Focus on:
             - OWASP Top 10 vulnerabilities (SQLi, XSS, etc.)
@@ -511,6 +732,7 @@ export class VulnerabilityAgent {
         temperature: 0.3,
         max_tokens: 8000
       })
+      ) // Close callWithRetry
 
       const response = message.choices[0]?.message?.content
       if (!response) {
@@ -675,8 +897,14 @@ export class VulnerabilityAgent {
     crawledData: CrawledDataSummary
   ): Promise<VulnerabilityReport> {
     try {
-      // Create clusters from the crawled data
-      const clusters = this.createDataClusters(crawledData)
+      // Filter and sample data to reduce payload size
+      const filteredData = this.filterCrawledData(crawledData)
+      if (filteredData.dataWasFiltered) {
+        console.log(`[Agent] Data filtered to reduce size: Crawl Results ${filteredData.originalCounts.crawlResults} -> ${filteredData.crawlResults.length}, API Calls ${filteredData.originalCounts.allApiCalls} -> ${filteredData.allApiCalls.length}`)
+      }
+
+      // Create clusters from the filtered data
+      const clusters = this.createDataClusters(filteredData)
       console.log(`Starting clustered analysis with ${clusters.length} cluster(s)...`)
 
       // Analyze each cluster
@@ -699,8 +927,9 @@ export class VulnerabilityAgent {
       return mergedReport
     } catch (error) {
       if (error instanceof z.ZodError) {
-        console.error('Zod validation error:', JSON.stringify(error.errors, null, 2))
-        throw new Error(`Invalid response format from AI: ${error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
+        const issues = (error as any).issues || (error as any).errors || []
+        console.error('Zod validation error:', JSON.stringify(issues, null, 2))
+        throw new Error(`Invalid response format from AI: ${issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`)
       }
       if (error instanceof SyntaxError) {
         console.error('JSON parse error:', error.message)
@@ -798,9 +1027,10 @@ export class VulnerabilityAgent {
       )
 
       try {
-        const message = await this.client.chat.completions.create({
-          model: this.model,
-          messages: [
+        const message = await this.callWithRetry(() =>
+          this.client.chat.completions.create({
+            model: this.model,
+            messages: [
             {
               role: 'system',
               content: `You are a professional penetration tester writing formal security reports. You MUST respond with ONLY valid JSON wrapped in <report> tags.
@@ -846,6 +1076,7 @@ CRITICAL OUTPUT FORMAT:
           temperature: 0.2,
           max_tokens: 8000
         })
+        ) // Close callWithRetry
         
         const content = message.choices[0]?.message?.content || ''
         const jsonMatch = content.match(/<report>([\s\S]*?)<\/report>/) || content.match(/\{[\s\S]*\}/)
@@ -919,15 +1150,22 @@ CRITICAL OUTPUT FORMAT:
       ? `\n(This is cluster ${clusterIndex + 1} of ${totalClusters} - analyzing a subset of discovered data)\n` 
       : ''
 
-    // Create lightweight summaries to save tokens
+    // Rich data for comprehensive vulnerability detection
     const summarizedCrawl = data.crawlResults.map(r => ({
       url: r.url,
       status: r.status,
       title: r.title || '',
+      responseHeaders: (r as any).responseHeaders || {},
+      htmlSnippet: (r as any).htmlSnippet || '',
       forms: r.forms?.map(f => ({ 
         action: f.action || '',
         method: f.method || '',
-        inputs: (f.fields || []).map(i => i.name).join(', ') 
+        fields: (f.fields || []).map(i => ({
+          name: i.name,
+          type: i.type,
+          required: i.required,
+          placeholder: i.placeholder || ''
+        }))
       })) || [],
       linkCount: r.links?.length || 0
     }))
@@ -935,7 +1173,8 @@ CRITICAL OUTPUT FORMAT:
     const summarizedApi = data.allApiCalls.map(c => ({
       endpoint: c.endpoint,
       method: c.method,
-      responseStatus: c.responseStatus
+      responseStatus: c.responseStatus,
+      responseHeaders: c.responseHeaders || {}
     }))
 
     // Limit context data

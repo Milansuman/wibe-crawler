@@ -1,5 +1,5 @@
-
 import { BrowserWindow, session } from 'electron'
+import { fuzzer, FuzzResult } from './fuzzer'
 
 export interface FormField {
   name: string
@@ -51,10 +51,21 @@ export interface CrawlResult {
   emails: string[]
   assets?: Record<string, string[]>
   error?: string
+  fuzzResults?: FuzzResult[]
+  responseHeaders?: Record<string, string>
+  htmlSnippet?: string
 }
 
 export class WebCrawler {
-  private window: BrowserWindow | null = null
+  // Performance optimization constants
+  private static readonly PARALLEL_LIMIT = 5 // Increased to 5
+  private static readonly WINDOW_POOL_SIZE = 5 // Increased to 5
+  private static readonly PAGE_TIMEOUT = 5000 // 5 seconds (reduced from 10s)
+  
+  private windowPool: { win: BrowserWindow; inUse: boolean }[] = [] // Pool of reusable windows with lock
+  private activeApiCalls = new Map<number, ApiCall[]>() // webContentsId -> ApiCall[]
+  private mainFrameStatus = new Map<number, number>() // webContentsId -> statusCode
+  private mainFrameHeaders = new Map<number, Record<string, string>>() // webContentsId -> responseHeaders
   private crawledUrls = new Set<string>()
   private urlQueue: string[] = []
   private baseUrl: string = ''
@@ -67,11 +78,12 @@ export class WebCrawler {
   private onProgress?: (url: string, results: CrawlResult[]) => void
   private onUrlsDiscovered?: (urls: string[]) => void
   private stopped: boolean = false
-  private context?: { cookies?: any[]; localStorage?: Record<string, string> }
+  private context?: { cookies?: any[]; localStorage?: Record<string, string>; includeAssets?: boolean }
   private currentPartition: string
+  private includeAssets: boolean
 
   constructor(
-    context?: { cookies?: any[]; localStorage?: Record<string, string> },
+    context?: { cookies?: any[]; localStorage?: Record<string, string>; includeAssets?: boolean },
     onProgress?: (url: string, results: CrawlResult[]) => void,
     onUrlsDiscovered?: (urls: string[]) => void
   ) {
@@ -79,18 +91,144 @@ export class WebCrawler {
     this.onProgress = onProgress
     this.onUrlsDiscovered = onUrlsDiscovered
     this.currentPartition = `persist:crawler-${Date.now()}`
+    this.includeAssets = context?.includeAssets ?? true
   }
 
   async init(): Promise<void> {
-    // No-op for now, window is created per page or reused
+    // Create window pool for faster crawling
+    console.log(`[NativeCrawler] Initializing ${WebCrawler.WINDOW_POOL_SIZE} reusable windows...`)
+    const ses = session.fromPartition(this.currentPartition)
+
+    // SET SESSION-WIDE LISTENERS ONCE
+    // 1. SELECTIVE RESOURCE BLOCKING for speed (keep CSS for security analysis, block fonts)
+    ses.webRequest.onBeforeRequest((details, callback) => {
+      try {
+        const url = details.url.toLowerCase()
+        let shouldBlock = 
+          !!url.match(/\.(woff2?|ttf|eot|otf)$/i) || // Block fonts
+          url.includes('fonts.googleapis') ||
+          url.includes('fonts.gstatic') ||
+          url.includes('/fonts/') ||
+          url.includes('favicon') ||
+          // Block Ads/Analytics
+          !!url.match(/(google-analytics|googletagmanager|facebook\.net|doubleclick|fbevents|hotjar|clarity|segment|intercom)/i)
+
+        // If assets are disabled, also block images and media
+        if (!this.includeAssets) {
+             shouldBlock = shouldBlock || 
+                !!url.match(/\.(jpg|jpeg|png|gif|svg|webp|ico|mp4|webm|ogg|mp3|wav)$/i)
+        }
+
+        callback({ cancel: shouldBlock })
+      } catch (err) {
+        console.error('[SessionListener] Error in onBeforeRequest:', err)
+        callback({ cancel: false })
+      }
+    })
+
+    // 2. Global Network interception for API calls
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+        try {
+            const isApi = this.isApiEndpoint(details.url, details.method)
+            if (isApi && details.webContentsId) {
+                const apiCall: ApiCall = {
+                    id: `api_${Math.random()}`,
+                    endpoint: details.url,
+                    method: details.method,
+                    params: this.extractParams(details.url),
+                    headers: details.requestHeaders
+                }
+                
+                const pageApiCalls = this.activeApiCalls.get(details.webContentsId)
+                if (pageApiCalls) {
+                    pageApiCalls.push(apiCall)
+                }
+                this.allApiCalls.set(apiCall.id, apiCall)
+                
+                try {
+                    this.discoveredDomains.add(new URL(details.url).hostname)
+                } catch {}
+            }
+            callback({ cancel: false, requestHeaders: details.requestHeaders })
+        } catch (err) {
+            console.error('[SessionListener] Error in onBeforeSendHeaders:', err)
+            callback({ cancel: false, requestHeaders: details.requestHeaders })
+        }
+    })
+
+    ses.webRequest.onCompleted((details) => {
+        if (details.webContentsId) {
+            if (details.resourceType === 'mainFrame') {
+                this.mainFrameStatus.set(details.webContentsId, details.statusCode)
+                // Capture response headers for security analysis
+                if (details.responseHeaders) {
+                    const headers: Record<string, string> = {}
+                    for (const [key, value] of Object.entries(details.responseHeaders)) {
+                        headers[key.toLowerCase()] = Array.isArray(value) ? value.join(', ') : String(value)
+                    }
+                    this.mainFrameHeaders.set(details.webContentsId, headers)
+                }
+            }
+            
+            const isApi = this.isApiEndpoint(details.url, details.method)
+            if (isApi) {
+                const pageApiCalls = this.activeApiCalls.get(details.webContentsId)
+                if (pageApiCalls) {
+                    const existing = pageApiCalls.find(a => a.endpoint === details.url)
+                    if (existing) {
+                        existing.responseStatus = details.statusCode
+                        existing.responseHeaders = details.responseHeaders as any
+                    }
+                }
+            }
+        }
+    })
+
+    for (let i = 0; i < WebCrawler.WINDOW_POOL_SIZE; i++) {
+        const win = new BrowserWindow({
+            show: false,
+            width: 1280,
+            height: 800,
+            webPreferences: {
+                offscreen: false,
+                partition: this.currentPartition,
+                javascript: true,
+                webSecurity: false
+            }
+        })
+        this.windowPool.push({ win, inUse: false })
+    }
+  }
+
+  /**
+   * Get an available window from the pool, waiting if necessary
+   */
+  private async getWindow(): Promise<{ win: BrowserWindow; inUse: boolean } | undefined> {
+    if (this.windowPool.length === 0) {
+      throw new Error('Window pool not initialized')
+    }
+
+    // Attempt to find a free window
+    let windowEntry = this.windowPool.find(e => !e.inUse)
+    
+    // If none free, wait until one becomes available
+    while (!windowEntry && !this.stopped) {
+        await new Promise(r => setTimeout(r, 100))
+        windowEntry = this.windowPool.find(e => !e.inUse)
+    }
+
+    if (!windowEntry) return undefined // Crawler stopped
+    
+    windowEntry.inUse = true
+    return windowEntry
   }
 
   async crawl(
     startUrl: string,
     maxPages: number = 50,
-    batchSize: number = 1 // Force serial for stability
+    _batchSize: number = 1 // Unused but kept for signature compatibility
   ): Promise<CrawlResult[]> {
-    console.log(`Starting native crawl for ${startUrl}`)
+    console.log(`Starting optimized native parallel crawl for ${startUrl}`)
     this.baseUrl = new URL(startUrl).origin
     this.urlQueue = [startUrl]
     this.crawledUrls.clear()
@@ -98,9 +236,12 @@ export class WebCrawler {
     this.stopped = false
     this.discoveredDomains.clear()
     this.allEmails.clear()
+    
+    // Reset thread-safe tracking maps for this crawl session
+    this.activeApiCalls.clear()
+    this.mainFrameStatus.clear()
 
     if (this.context?.cookies) {
-        // Pre-set cookies in the session
         const ses = session.fromPartition(this.currentPartition)
         for (const cookie of this.context.cookies) {
             try {
@@ -122,43 +263,52 @@ export class WebCrawler {
         }
     }
 
+    // PARALLEL BATCH CRAWLING logic
     while (!this.stopped && this.urlQueue.length > 0 && this.crawledUrls.size < maxPages) {
-      const url = this.urlQueue.shift()
-      if (!url || this.crawledUrls.has(url)) continue
-
-      this.crawledUrls.add(url)
-      
-      try {
-        const result = await this.crawlPage(url)
-        if (result) {
-            this.results.push(result)
-            
-            // Process links
-            const newLinks = result.links.filter(
-                (link) =>
-                  !this.crawledUrls.has(link) &&
-                  !this.urlQueue.includes(link) &&
-                  this.isSameDomain(link)
-              )
-
-              if (newLinks.length > 0) {
-                this.urlQueue.push(...newLinks)
-                if (this.onUrlsDiscovered) {
-                  this.onUrlsDiscovered([...this.urlQueue])
-                }
-              }
-
-              if (this.onProgress) {
-                  this.onProgress(result.url, [...this.results])
-              }
+      const batch: string[] = []
+      while (batch.length < WebCrawler.PARALLEL_LIMIT && this.urlQueue.length > 0 && this.crawledUrls.size + batch.length < maxPages) {
+        const url = this.urlQueue.shift()
+        if (url && !this.crawledUrls.has(url)) {
+          this.crawledUrls.add(url)
+          batch.push(url)
         }
-      } catch (e) {
-          console.error(`Failed to crawl ${url}`, e)
+      }
+
+      if (batch.length === 0) break
+
+      console.log(`[NativeCrawler] Crawling batch of ${batch.length} pages in parallel...`)
+      const batchResults = await Promise.allSettled(
+        batch.map(url => this.crawlPage(url))
+      )
+
+      for (let i = 0; i < batchResults.length; i++) {
+        const result = batchResults[i]
+        if (result.status === 'fulfilled' && result.value) {
+          this.results.push(result.value)
+          
+          const newLinks = result.value.links.filter(
+            (link) =>
+              !this.crawledUrls.has(link) &&
+              !this.urlQueue.includes(link) &&
+              this.isSameDomain(link)
+          )
+
+          if (newLinks.length > 0) {
+            this.urlQueue.push(...newLinks)
+            if (this.onUrlsDiscovered) {
+              this.onUrlsDiscovered([...this.urlQueue])
+            }
+          }
+
+          if (this.onProgress) {
+            this.onProgress(result.value.url, [...this.results])
+          }
+        } else if (result.status === 'rejected') {
+          console.error(`Failed to crawl ${batch[i]}:`, result.reason)
+        }
       }
 
       if (this.stopped) break
-      // Reduced delay for faster crawling (especially important for HTTPS)
-      await new Promise(r => setTimeout(r, 200))
     }
 
     return this.results
@@ -167,119 +317,117 @@ export class WebCrawler {
   private async crawlPage(url: string): Promise<CrawlResult | undefined> {
     if (this.stopped) return undefined
     
-    console.log(`[NativeCrawler] Crawling ${url}`)
+    // Get window from pool (awaits if none free)
+    const entry = await this.getWindow()
+    if (!entry) return undefined // Crawler stopped
+
+    const { win } = entry
+    const wcId = win.webContents.id
     
-    // Create window
-    const win = new BrowserWindow({
-        show: false,
-        width: 1280,
-        height: 800,
-        webPreferences: {
-            offscreen: false, // true might cause rendering issues with some sites
-            partition: this.currentPartition,
-            javascript: true,
-            webSecurity: false // allow mixed content
-        }
-    })
-
-    const ses = win.webContents.session
+    // Setup local collections for this load in the session maps
     const pageApiCalls: ApiCall[] = []
-    const apiDomains = new Set<string>()
-    let responseStatus = 0
-
-    // Network interception
-    ses.webRequest.onBeforeSendHeaders((details, callback) => {
-        const isApi = this.isApiEndpoint(details.url, details.method)
-        if (isApi) {
-             const apiCall: ApiCall = {
-                id: `api_${Math.random()}`,
-                endpoint: details.url,
-                method: details.method,
-                params: this.extractParams(details.url),
-                headers: details.requestHeaders
-             }
-             pageApiCalls.push(apiCall)
-             this.allApiCalls.set(apiCall.id, apiCall)
-             try {
-                apiDomains.add(new URL(details.url).hostname)
-                this.discoveredDomains.add(new URL(details.url).hostname)
-             } catch {}
-        }
-        callback({ cancel: false, requestHeaders: details.requestHeaders })
-    })
-
-    ses.webRequest.onCompleted((details) => {
-        if (details.resourceType === 'mainFrame' && details.url === url) {
-            responseStatus = details.statusCode
-        }
-         const isApi = this.isApiEndpoint(details.url, details.method)
-         if (isApi) {
-             // update response status
-             const existing = pageApiCalls.find(a => a.endpoint === details.url)
-             if (existing) {
-                 existing.responseStatus = details.statusCode
-                 existing.responseHeaders = details.responseHeaders as any
-             }
-         }
-    })
+    this.activeApiCalls.set(wcId, pageApiCalls)
+    this.mainFrameStatus.set(wcId, 0)
 
     try {
-        // Add timeout to prevent HTTPS sites from hanging indefinitely
-        const loadPromise = win.loadURL(url, { 
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            extraHeaders: 'Accept-Encoding: gzip, deflate' // Enable compression for faster downloads
-        })
-        
+        console.log(`[NativeCrawler] Loading ${url}...`)
         const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Page load timeout')), 10000) // 10 second timeout
+            setTimeout(() => reject(new Error('Page load timeout')), WebCrawler.PAGE_TIMEOUT)
         )
         
-        await Promise.race([loadPromise, timeoutPromise]).catch(err => {
-            console.warn(`Timeout or error loading ${url}:`, err.message)
-            // Continue anyway, we may have partial content
+        const loadPromise = win.loadURL(url, { 
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            extraHeaders: 'Accept-Encoding: gzip, deflate'
         })
         
-        const title = win.getTitle()
-
-        // Extract data using executeJavaScript
-        const extractionScript = `
-            (() => {
-                const links = Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
-                
-                const forms = Array.from(document.querySelectorAll('form')).map((form, index) => {
-                    const inputs = Array.from(form.querySelectorAll('input, textarea, select')).map(input => ({
-                        name: input.name || input.id || 'field_' + Math.random().toString(36).substr(2, 9),
-                        type: input.type || input.tagName.toLowerCase(),
-                        value: input.value || '',
-                        required: input.hasAttribute('required'),
-                        placeholder: input.getAttribute('placeholder') || ''
-                    }));
-                    
-                    return {
-                        id: 'form_' + index,
-                        action: form.action || window.location.href,
-                        method: form.method || 'get',
-                        url: window.location.href,
-                        fields: inputs
-                    };
-                });
-
-                const emails = (document.body.innerText.match(/[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g) || []);
-                
-                // Assets
-                 const assets = {
-                    images: Array.from(document.images).map(i => i.src),
-                    scripts: Array.from(document.scripts).filter(s => s.src).map(s => s.src),
-                    styles: Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map(l => l.href)
-                 };
-
-                return { links, forms, emails, assets };
-            })()
-        `
+        await Promise.race([loadPromise, timeoutPromise]).catch(err => {
+            console.warn(`[NativeCrawler] Warning for ${url}: ${err.message}`)
+        })
         
-        const data = await win.webContents.executeJavaScript(extractionScript)
+        // Wait for JS execution and DOM to settle (Reduced to 400ms for speed)
+        await new Promise(r => setTimeout(r, 400))
+
+        // Stop any pending loading to ensure DOM is stable
+        try { win.webContents.stop() } catch {}
+
+        let data: any = { links: [], forms: [], emails: [], assets: {}, title: '' }
         
-        // Aggregate assets
+        try {
+            const extractionScript = `
+                (() => {
+                    try {
+                        const links = Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
+                        const forms = Array.from(document.querySelectorAll('form')).map((form, index) => {
+                            try {
+                                const inputs = Array.from(form.querySelectorAll('input, textarea, select')).map(input => ({
+                                    name: input.name || input.id || 'field_' + Math.random().toString(36).substr(2, 9),
+                                    type: input.type || input.tagName.toLowerCase(),
+                                    value: input.value || '',
+                                    required: input.hasAttribute('required'),
+                                    placeholder: input.getAttribute('placeholder') || ''
+                                }));
+                                
+                                return {
+                                    id: 'form_' + index,
+                                    action: form.action || window.location.href,
+                                    method: form.method || 'get',
+                                    url: window.location.href,
+                                    fields: inputs
+                                };
+                            } catch (e) { return null; }
+                        }).filter(f => f !== null);
+
+                        const bodyText = document.body ? document.body.innerText : '';
+                        const emails = (bodyText.match(/[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g) || []);
+                        
+                        let assets = {};
+                        if (${this.includeAssets}) {
+                            assets = {
+                                images: Array.from(document.images).map(i => i.src),
+                                videos: Array.from(document.querySelectorAll('video, source')).map(v => (v.src || v.currentSrc)).filter(s => s),
+                                documents: Array.from(document.querySelectorAll('a[href]'))
+                                     .map(a => a.href)
+                                     .filter(href => href.match(/\\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|sql|txt|csv|json|xml)$/i)),
+                                scripts: Array.from(document.scripts).filter(s => s.src).map(s => s.src)
+                            };
+                        }
+
+                        const htmlSnippet = document.documentElement ? document.documentElement.outerHTML.substring(0, 1500) : '';
+                        return { links, forms, emails, assets, title: document.title, htmlSnippet };
+                    } catch (e) {
+                        return null; // Signal failure to try fallback
+                    }
+                })()
+            `
+            data = await win.webContents.executeJavaScript(extractionScript)
+            
+            if (!data) throw new Error('Script returned null')
+
+        } catch (scriptErr) {
+            console.warn(`[NativeCrawler] Full extraction failed for ${url}, trying fallback...`)
+            // Fallback: minimal extraction (just links)
+            try {
+                 const fallbackScript = `
+                    (() => {
+                        try {
+                            return {
+                                links: Array.from(document.querySelectorAll('a[href]')).map(a => a.href),
+                                title: document.title,
+                                forms: [], emails: [], assets: {}
+                            }
+                        } catch { return { links: [], title: '', forms: [], emails: [], assets: {} } }
+                    })()
+                `
+                data = await win.webContents.executeJavaScript(fallbackScript)
+            } catch (fallbackErr) {
+                console.error(`[NativeCrawler] Fallback extraction also failed for ${url}`)
+                // Use default empty data
+            }
+        }
+        
+        const title = data.title || ''
+        
+        // Aggregate findings
         if (data.assets) {
             for (const [key, urls] of Object.entries(data.assets)) {
                 if (!this.allAssets.has(key)) this.allAssets.set(key, new Set())
@@ -288,13 +436,12 @@ export class WebCrawler {
             }
         }
 
-        // Aggregate emails
         if (data.emails) {
             (data.emails as string[]).forEach(e => this.allEmails.add(e))
         }
 
-        // Get cookies
-        const cookies = await ses.cookies.get({ url })
+        // Cookies
+        const cookies = await win.webContents.session.cookies.get({ url })
         const pageCookies = cookies.map(c => {
             const cd: CookieData = {
                 id: 'cookie_' + Math.random().toString(36).substr(2, 9),
@@ -306,27 +453,50 @@ export class WebCrawler {
                 httpOnly: c.httpOnly || false,
                 expires: c.expirationDate
             }
-            this.allCookies.set(cd.id, cd)
+            this.allCookies.set(cd.name + cd.domain, cd)
             return cd
         })
         
-        // normalize links
-         const normalizedLinks = (data.links as string[])
-        .map((link: string) => this.normalizeUrl(link))
-        .filter((link: string) => link && this.isSameDomain(link))
-        .filter((link: string, index: number, arr: string[]) => arr.indexOf(link) === index)
+        const normalizedLinks = (data.links as string[])
+            .map((link: string) => this.normalizeUrl(link))
+            .filter((link: string) => link && this.isSameDomain(link))
+            .filter((link: string, index: number, arr: string[]) => arr.indexOf(link) === index)
+
+         // ACTIVE PROBING (Fuzzing)
+         let fuzzResults: FuzzResult[] = []
+         try {
+            // 1. Fuzz Parameters (SQLi, XSS)
+            if (url.includes('?')) {
+                console.log(`[NativeCrawler] Fuzzing parameters for ${url}...`)
+                const paramResults = await fuzzer.fuzzParameters(url)
+                fuzzResults.push(...paramResults)
+            }
+
+            // 2. Check Sensitive Files (Only on home page or new subdomains)
+            const urlObj = new URL(url)
+            if (urlObj.pathname === '/' || urlObj.pathname === '' || this.crawledUrls.size === 1) {
+                 console.log(`[NativeCrawler] Checking sensitive paths for ${urlObj.origin}...`)
+                 const pathResults = await fuzzer.checkSensitivePaths(url)
+                 fuzzResults.push(...pathResults)
+            }
+         } catch (fuzzErr) {
+             console.error(`[NativeCrawler] Fuzzing failed for ${url}:`, fuzzErr)
+         }
 
          return {
             url,
-            status: responseStatus,
+            status: this.mainFrameStatus.get(wcId) || 0,
             title,
             links: normalizedLinks,
-            domains: Array.from(apiDomains),
-            forms: data.forms,
+            domains: Array.from(new Set(pageApiCalls.map(a => { try { return new URL(a.endpoint).hostname } catch { return '' } }).filter(h => h))),
+            forms: data.forms || [],
             apiCalls: pageApiCalls,
             cookies: pageCookies,
             emails: Array.from(new Set(data.emails)) as string[],
-            assets: data.assets
+            assets: data.assets || {},
+            fuzzResults,
+            responseHeaders: this.mainFrameHeaders.get(wcId) || {},
+            htmlSnippet: data.htmlSnippet || ''
          }
 
     } catch (error) {
@@ -343,7 +513,13 @@ export class WebCrawler {
             emails: []
         }
     } finally {
-        win.destroy()
+        // Release window back to pool
+        entry.inUse = false
+        // Cleanup tracking for this load
+        this.activeApiCalls.delete(wcId)
+        this.mainFrameStatus.delete(wcId)
+        this.mainFrameHeaders.delete(wcId)
+        try { win.webContents.stop() } catch {}
     }
   }
 
@@ -411,7 +587,7 @@ export class WebCrawler {
        return r 
    }
 
-   async submitForm(formData: any): Promise<any> {
+   async submitForm(_formData: any): Promise<any> {
        // Similar to crawlPage but form submission
        // For now returning error to unblock basic crawl
        return { success: false, error: 'Form submission not ported to native crawler yet' }

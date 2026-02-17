@@ -1,0 +1,5 @@
+﻿
+> wibe-crawler@1.0.0 typecheck:node
+> tsc --noEmit -p tsconfig.node.json --composite false
+
+src/main/agent.ts(48,7): error TS6133: 'FullReportSchema' is declared but its value is never read.

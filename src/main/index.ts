@@ -107,7 +107,7 @@ app.whenReady().then(() => {
     const sender = event.sender
 
     crawler = new WebCrawler(
-      context,
+      context as { cookies?: any[]; localStorage?: Record<string, string>; includeAssets?: boolean },
       (currentUrl: string, results: CrawlResult[]) => {
         // Send progress updates to renderer
         sender.send('crawl-progress', {
@@ -140,7 +140,33 @@ app.whenReady().then(() => {
 
     try {
       console.log('start crawl', context)
+      await crawler.init()
       const results = await crawler.crawl(url, 10000)
+      
+      // Crawler might be null if stopped during crawl
+      if (!crawler) {
+          console.log('[IPC] Crawler was stopped, returning partial results')
+          sender.send('crawl-complete', {
+              results: results.map((r) => ({
+                url: r.url,
+                status: r.status,
+                title: r.title,
+                forms: r.forms,
+                apiCalls: r.apiCalls,
+                cookies: r.cookies,
+                emails: r.emails,
+                assets: r.assets,
+                error: r.error
+              })),
+              domains: [],
+              allApiCalls: [],
+              allCookies: [],
+              allEmails: [],
+              allAssets: {}
+          })
+          return { success: true, results }
+      }
+
       sender.send('crawl-complete', {
           results: results.map((r) => ({
             url: r.url,

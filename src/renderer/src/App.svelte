@@ -151,7 +151,7 @@
     }
   })
 
-  async function startScan(url, context = { cookies: [], localStorage: {} }) {
+  async function startScan(url, context = { cookies: [], localStorage: [], includeAssets: true }) {
     console.log('App.startScan called with:', url)
     if (!url || isScanning) return
 

@@ -50,6 +50,9 @@ export interface CrawlResult {
   emails: string[]
   assets?: Record<string, string[]>
   error?: string
+  fuzzResults?: import('./fuzzer').FuzzResult[]
+  responseHeaders?: Record<string, string>
+  htmlSnippet?: string
 }
 
 export class WebCrawler {
@@ -269,7 +272,7 @@ export class WebCrawler {
         try {
           await page.evaluate((storage) => {
             for (const [key, value] of Object.entries(storage)) {
-              localStorage.setItem(key, value)
+              localStorage.setItem(key, value as string)
             }
           }, this.context.localStorage)
         } catch (error) {
@@ -423,7 +426,7 @@ export class WebCrawler {
 
       const pageEmailsSet = new Set(pageEmails)
       pageEmailsSet.forEach((email) => {
-        this.allEmails.add(email)
+        this.allEmails.add(email as string)
       })
 
       return {
@@ -435,7 +438,7 @@ export class WebCrawler {
         forms,
         apiCalls: pageApiCalls,
         cookies: pageCookies,
-        emails: Array.from(pageEmailsSet),
+        emails: Array.from(pageEmailsSet) as string[],
         assets: categorized
       }
     } catch (error) {
@@ -504,39 +507,9 @@ export class WebCrawler {
     return out
   }
 
-  private isApiEndpoint(url: string, method: string): boolean {
-    try {
-      const urlObj = new URL(url)
-      const path = urlObj.pathname.toLowerCase()
 
-      // Common API patterns
-      const apiPatterns = ['/api/', '/rest/', '/graphql', '/v1/', '/v2/', '/v3/', '.json', '.xml']
 
-      // Check if URL contains API patterns
-      const hasApiPattern = apiPatterns.some(
-        (pattern) => path.includes(pattern) || url.includes(pattern)
-      )
 
-      // Check HTTP methods typically used for APIs
-      const isApiMethod =
-        ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) || (method === 'GET' && hasApiPattern)
-
-      // Check content type headers would be ideal but not available in request event
-      return hasApiPattern || isApiMethod
-    } catch {
-      return false
-    }
-  }
-
-  private extractParams(url: string): string {
-    try {
-      const urlObj = new URL(url)
-      const params = Array.from(urlObj.searchParams.keys())
-      return params.length > 0 ? params.join(', ') : 'none'
-    } catch {
-      return 'none'
-    }
-  }
 
   private categorizeAsset(url: string): string | null {
     try {

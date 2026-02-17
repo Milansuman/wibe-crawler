@@ -22,6 +22,7 @@
   let localStorageInput = ''
   let cookiesError = ''
   let localStorageError = ''
+  let includeAssets = true
 
   $: prefixWidth = mirrorEl ? mirrorEl.offsetWidth : 0
   $: showUrlHint = selectedUrl === 'https://'
@@ -99,7 +100,7 @@
       }
       console.log(cookies)
 
-      onStartScan(urlToScan, { cookies, localStorage })
+      onStartScan(urlToScan, { cookies, localStorage, includeAssets })
     }
   }
 </script>
@@ -251,6 +252,18 @@
           class="w-full bg-transparent border border-gray-700 p-2 px-3 text-xs outline-none focus:border-gray-500 font-mono resize-none"
           rows="3"
         ></textarea>
+      </div>
+
+      <div class="pt-2 border-t border-gray-800/50">
+        <label
+          class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none hover:text-gray-300 transition-colors"
+        >
+          <input type="checkbox" bind:checked={includeAssets} class="accent-blue-500 w-3 h-3" />
+          <span>Include Assets (Images, Videos, Documents)</span>
+        </label>
+        <p class="text-[10px] text-gray-600 ml-5 mt-1">
+          Uncheck to speed up crawling. Assets will not be downloaded or listed in results.
+        </p>
       </div>
     </div>
   {/if}
