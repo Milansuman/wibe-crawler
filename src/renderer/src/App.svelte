@@ -19,6 +19,21 @@
   let isAnalyzing = false
   let isExporting = false
   let showResults = false
+  let isDarkMode = localStorage.getItem('theme') !== 'light'
+
+  $: if (typeof document !== 'undefined') {
+    if (isDarkMode) {
+      document.body.classList.remove('light-mode')
+      localStorage.setItem('theme', 'dark')
+    } else {
+      document.body.classList.add('light-mode')
+      localStorage.setItem('theme', 'light')
+    }
+  }
+
+  function toggleTheme() {
+    isDarkMode = !isDarkMode
+  }
   let selectedCrawledUrl = ''
   let crawledUrls = []
   let fullCrawlResults = []
@@ -467,8 +482,12 @@
   }
 </script>
 
-<div class="flex flex-col bg-black w-screen h-screen text-white text-sm">
-  <TitleBar />
+<div
+  class="flex flex-col bg-black w-screen h-screen text-white text-sm {isDarkMode
+    ? ''
+    : 'light-mode-active'}"
+>
+  <TitleBar {isDarkMode} onToggleTheme={toggleTheme} />
 
   <ScanHeader
     {isScanning}

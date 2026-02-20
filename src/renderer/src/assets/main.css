@@ -28,3 +28,251 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #4b5563;
 }
+
+/* Light Mode Core Overrides */
+body.light-mode {
+  background-color: #ffffff;
+  color: #111827;
+}
+
+.light-mode .bg-black {
+  background-color: #ffffff !important;
+}
+
+.light-mode .bg-gray-900 {
+  background-color: #f9fafb !important;
+}
+
+.light-mode .bg-gray-800 {
+  background-color: #f3f4f6 !important;
+}
+
+.light-mode .bg-transparent {
+  background-color: transparent !important;
+}
+
+.light-mode .text-white {
+  color: #111827 !important;
+}
+
+.light-mode .text-gray-400 {
+  color: #4b5563 !important;
+}
+
+.light-mode .text-gray-500 {
+  color: #6b7280 !important;
+}
+
+.light-mode .text-gray-600 {
+  color: #9ca3af !important;
+}
+
+.light-mode .border-gray-800 {
+  border-color: #e5e7eb !important;
+}
+
+.light-mode .border-gray-700 {
+  border-color: #d1d5db !important;
+}
+
+.light-mode .border-neutral-50\/10 {
+  border-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Component Specific Overrides */
+.light-mode .title-bar {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-bottom: 1px solid #e5e7eb !important;
+}
+
+.light-mode .text-white\/45 {
+  color: rgba(0, 0, 0, 0.45) !important;
+}
+
+.light-mode .hover\:bg-white\/10:hover {
+  background-color: rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Inputs and interactive elements */
+.light-mode input,
+.light-mode textarea {
+  color: #111827 !important;
+  background-color: #ffffff !important;
+}
+
+.light-mode input::placeholder,
+.light-mode textarea::placeholder {
+  color: #9ca3af !important;
+}
+
+/* Tabs */
+.light-mode .text-white.border-blue-500 {
+  color: #2563eb !important;
+  /* blue-600 */
+}
+
+/* Scrollbar for Light Mode */
+.light-mode ::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+}
+
+.light-mode ::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Banners */
+.light-mode .bg-yellow-600\/20 {
+  background-color: rgba(251, 191, 36, 0.1) !important;
+}
+
+.light-mode .bg-red-950\/30 {
+  background-color: #fee2e2 !important;
+}
+
+.light-mode .bg-yellow-950\/30 {
+  background-color: #fef3c7 !important;
+}
+
+/* Buttons */
+.light-mode button:not(.control-button) {
+  background-color: #fff;
+}
+
+.light-mode button:hover:not(.control-button) {
+  background-color: #f9fafb;
+}
+
+.light-mode .border-purple-700 {
+  border-color: #d8b4fe !important;
+  color: #6b21a8 !important;
+}
+
+.light-mode .border-purple-700:hover {
+  border-color: #a855f7 !important;
+}
+
+.light-mode .border-blue-500 {
+  border-color: #3b82f6 !important;
+}
+
+.light-mode .text-blue-400 {
+  color: #2563eb !important;
+}
+
+/* Fix for transparent/black surfaces */
+.light-mode .bg-black\/50 {
+  background-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.light-mode .bg-gray-950\/50 {
+  background-color: rgba(243, 244, 246, 0.5) !important;
+}
+
+.light-mode .bg-gray-900\/30 {
+  background-color: rgba(229, 231, 235, 0.3) !important;
+}
+
+.light-mode .bg-gray-900\/50 {
+  background-color: rgba(229, 231, 235, 0.5) !important;
+}
+
+/* Severity Colors for Light Mode */
+.light-mode .text-red-400 {
+  color: #dc2626 !important;
+}
+
+/* red-600 */
+.light-mode .text-orange-400 {
+  color: #ea580c !important;
+}
+
+/* orange-600 */
+.light-mode .text-yellow-400 {
+  color: #ca8a04 !important;
+}
+
+/* yellow-600 */
+.light-mode .text-blue-400 {
+  color: #2563eb !important;
+}
+
+/* blue-600 */
+.light-mode .text-gray-300 {
+  color: #374151 !important;
+}
+
+/* gray-700 */
+.light-mode .text-gray-200 {
+  color: #111827 !important;
+}
+
+/* gray-900 */
+
+/* Special case for sidebar items */
+.light-mode .border-gray-700.pl-3 {
+  border-left-color: #d1d5db !important;
+}
+
+/* Animations and specialized backgrounds */
+.light-mode .bg-green-950\/20 {
+  background-color: #f0fdf4 !important;
+}
+
+.light-mode .bg-green-950\/30 {
+  background-color: #dcfce7 !important;
+}
+
+.light-mode .text-green-400 {
+  color: #16a34a !important;
+}
+
+.light-mode .border-green-900\/30 {
+  border-color: #bbf7d0 !important;
+}
+
+.light-mode .border-green-900\/50 {
+  border-color: #86efac !important;
+}
+
+.light-mode .bg-blue-950\/30 {
+  background-color: #eff6ff !important;
+}
+
+.light-mode .bg-blue-950\/50 {
+  background-color: #dbeafe !important;
+}
+
+.light-mode .border-blue-900\/50 {
+  border-color: #bfdbfe !important;
+}
+
+/* Fix for the main title bar rounded top */
+.light-mode .title-bar {
+  border-top-left-radius: 0.75rem;
+  border-top-right-radius: 0.75rem;
+}
+
+/* Select and other form elements */
+.light-mode select {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  border-color: #d1d5db !important;
+}
+
+.light-mode select:focus {
+  border-color: #3b82f6 !important;
+}
+
+/* Range input */
+.light-mode input[type="range"] {
+  accent-color: #2563eb;
+}
+
+/* Hover surfaces in results */
+.light-mode .hover\:bg-gray-900:hover {
+  background-color: #f3f4f6 !important;
+}
+
+.light-mode .bg-gray-900 {
+  background-color: #f9fafb !important;
+}
