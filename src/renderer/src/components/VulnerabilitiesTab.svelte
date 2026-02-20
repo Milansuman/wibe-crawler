@@ -46,6 +46,14 @@
         return 'text-gray-400 bg-gray-950/50 border-gray-800'
     }
   }
+
+  function getCvssColor(score) {
+    if (!score) return 'text-gray-400 bg-gray-900'
+    if (score >= 9.0) return 'text-red-400 bg-red-950/50 border-red-900'
+    if (score >= 7.0) return 'text-orange-400 bg-orange-950/50 border-orange-900'
+    if (score >= 4.0) return 'text-yellow-400 bg-yellow-950/50 border-yellow-900'
+    return 'text-blue-400 bg-blue-950/50 border-blue-900'
+  }
 </script>
 
 <div class="h-full flex flex-col">
@@ -111,20 +119,38 @@
                 >
                   {vuln.name}
                 </h3>
-                <span
-                  class="shrink-0 text-[10px] font-mono uppercase px-2 py-0.5 border {getSeverityBadgeColor(
-                    vuln.severity
-                  )}"
-                >
-                  {vuln.severity}
-                </span>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  {#if vuln.cvss}
+                    <span
+                      class="text-[9px] font-bold px-1.5 py-0.5 border {getCvssColor(vuln.cvss)}"
+                    >
+                      CVSS {vuln.cvss}
+                    </span>
+                  {/if}
+                  <span
+                    class="text-[10px] font-mono uppercase px-2 py-0.5 border {getSeverityBadgeColor(
+                      vuln.severity
+                    )}"
+                  >
+                    {vuln.severity}
+                  </span>
+                </div>
               </div>
               <p class="text-gray-400 text-xs leading-relaxed line-clamp-2 mb-2">
                 {vuln.description}
               </p>
+              {#if vuln.cwe}
+                <div class="mt-2 flex items-center gap-2">
+                  <span
+                    class="text-[10px] font-mono text-gray-500 bg-gray-800/50 px-1.5 py-0.5 border border-gray-700/50"
+                  >
+                    {vuln.cwe}
+                  </span>
+                </div>
+              {/if}
               {#if vuln.location}
                 <div
-                  class="flex items-center gap-1.5 text-xs text-gray-500 font-mono overflow-hidden"
+                  class="mt-2 flex items-center gap-1.5 text-xs text-gray-500 font-mono overflow-hidden"
                 >
                   <span class="shrink-0 text-gray-600">📍</span>
                   <span
@@ -157,13 +183,31 @@
             )}"
           >
             <div class="flex justify-between items-start gap-2 mb-3">
-              <span
-                class="shrink-0 text-[10px] font-bold font-mono uppercase tracking-wider px-2 py-1 border {getSeverityBadgeColor(
-                  vuln.severity
-                )}"
-              >
-                {vuln.severity}
-              </span>
+              <div class="flex flex-wrap gap-1">
+                <span
+                  class="shrink-0 text-[10px] font-bold font-mono uppercase tracking-wider px-2 py-1 border {getSeverityBadgeColor(
+                    vuln.severity
+                  )}"
+                >
+                  {vuln.severity}
+                </span>
+                {#if vuln.cvss}
+                  <span
+                    class="shrink-0 text-[10px] font-bold px-1.5 py-1 border {getCvssColor(
+                      vuln.cvss
+                    )}"
+                  >
+                    CVSS {vuln.cvss}
+                  </span>
+                {/if}
+              </div>
+              {#if vuln.cwe}
+                <span
+                  class="text-[9px] font-mono text-gray-500 bg-black/20 px-1 py-0.5 border border-white/5 whitespace-nowrap"
+                >
+                  {vuln.cwe}
+                </span>
+              {/if}
             </div>
 
             <h3 class="font-semibold text-sm text-gray-100 mb-2 line-clamp-2 leading-snug">

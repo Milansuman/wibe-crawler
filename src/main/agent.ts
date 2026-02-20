@@ -171,6 +171,39 @@ class KeyManager {
     }
   }
 
+  /**
+   * Updates the key pool with a new set of clients, reconciling existing state
+   */
+  updateKeys(newClients: Groq[]) {
+    // Keep track of which new keys we already have (by comparing apiKey)
+    const newKeys: KeyMetadata[] = []
+    
+    newClients.forEach((client, index) => {
+      const apiKey = (client as any).apiKey
+      // Try to find existing key metadata with same API key
+      const existing = this.keys.find(k => (k.client as any).apiKey === apiKey)
+      
+      if (existing) {
+        // Reuse existing metadata to preserve cooldown/inUse state
+        newKeys.push({
+          ...existing,
+          index // Update index to match new array
+        })
+      } else {
+        // New key
+        newKeys.push({
+          index,
+          client,
+          onCooldownUntil: 0,
+          inUse: false
+        })
+      }
+    })
+    
+    console.log(`[KeyManager] Reconciled keys: ${this.keys.length} -> ${newKeys.length}`)
+    this.keys = newKeys
+  }
+
   get totalKeys(): number {
     return this.keys.length
   }
@@ -232,6 +265,33 @@ export class VulnerabilityAgent {
     this.keyManager = new KeyManager(this.clients)
   }
 
+  /**
+   * Re-reads .env file and updates API keys dynamically
+   */
+  refreshKeys() {
+    try {
+      const projectRoot = process.cwd()
+      const envPath = path.join(projectRoot, '.env')
+      
+      if (fs.existsSync(envPath)) {
+        const envContent = fs.readFileSync(envPath, 'utf-8')
+        const match = envContent.match(/^GROQ_API_KEY=(.*)$/m)
+        if (match && match[1]) {
+          const fileKey = match[1].trim()
+          const keys = fileKey.split(',').map(k => k.trim()).filter(k => k.length > 0 && k.startsWith('gsk_'))
+          
+          if (keys.length > 0) {
+            const newClients = keys.map(k => new Groq({ apiKey: k }))
+            this.clients = newClients
+            this.keyManager.updateKeys(newClients)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Agent] Failed to refresh keys:', err)
+    }
+  }
+
   setModel(model: string): void {
     this.model = model
   }
@@ -267,23 +327,31 @@ export class VulnerabilityAgent {
    * Extracts JSON from AI response using multiple strategies
    */
   private extractJSON(response: string): string {
-    // Strategy 1: Look for XML-style tags
-    const xmlMatch = response.match(/<(?:vulnerability|report)>([\s\S]*?)<\/(?:vulnerability|report)>/i)
-    if (xmlMatch) {
-      return xmlMatch[1].trim()
-    }
-
-    // Strategy 2: Look for markdown code blocks
+    // Strategy 1: Look for markdown code blocks (most common)
     const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
     if (codeBlockMatch) {
       return codeBlockMatch[1].trim()
+    }
+
+    // Strategy 2: Look for XML-style tags
+    const xmlMatch = response.match(/<(?:vulnerability|report|json)>([\s\S]*?)<\/(?:vulnerability|report|json)>/i)
+    if (xmlMatch) {
+      return xmlMatch[1].trim()
     }
 
     // Strategy 3: Look for JSON object or array (most permissive)
     // We look for the FIRST { or [ and the LAST } or ]
     const firstBrace = response.indexOf('{')
     const firstBracket = response.indexOf('[')
-    const start = (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) ? firstBrace : firstBracket
+    let start = -1
+    
+    if (firstBrace !== -1 && firstBracket !== -1) {
+      start = Math.min(firstBrace, firstBracket)
+    } else if (firstBrace !== -1) {
+      start = firstBrace
+    } else if (firstBracket !== -1) {
+      start = firstBracket
+    }
 
     if (start !== -1) {
       const lastBrace = response.lastIndexOf('}')
@@ -291,6 +359,8 @@ export class VulnerabilityAgent {
       const end = Math.max(lastBrace, lastBracket)
       
       if (end > start) {
+        // Validation: sometimes AI wraps it in ` ``` ` and we missed it with regex
+        // Strip any leading/trailing backticks or quote-like debris
         return response.substring(start, end + 1).trim()
       }
     }
@@ -308,9 +378,15 @@ export class VulnerabilityAgent {
    * Creates data clusters to process large datasets in batches
    * Groups similar data types together to reduce payload per request
    */
-  private createDataClusters(data: CrawledDataSummary): CrawledDataSummary[] {
-    const CLUSTER_SIZE = 8
+  private createDataClusters(data: CrawledDataSummary, numKeys: number = 1): CrawledDataSummary[] {
+    // Dynamically adjust cluster size: if we have more keys, use smaller clusters to increase parallelism
+    // Minimum 3 results per cluster to stay efficient, max 8 to stay within token limits
+    const CLUSTER_SIZE = numKeys > 1 
+      ? Math.max(3, Math.min(8, Math.ceil(data.crawlResults.length / numKeys)))
+      : 8
+      
     const clusters: CrawledDataSummary[] = []
+    console.log(`[Agent] Using dynamic cluster size: ${CLUSTER_SIZE} based on ${numKeys} keys`)
 
     // Split crawl results into clusters
     const crawlClusters: CrawlResult[][] = []
@@ -351,12 +427,13 @@ export class VulnerabilityAgent {
     clusterData: CrawledDataSummary,
     clusterIndex: number,
     totalClusters: number,
+    workerId: number,
     onQuotaExhausted?: (exhausted: boolean) => void
   ): Promise<VulnerabilityReport> {
-    const prompt = this.buildAnalysisPrompt(clusterData, clusterIndex, totalClusters)
-
-
-    const leasedKey = await this.keyManager.leaseKey()
+    console.group(`[Worker ${workerId}] Cluster ${clusterIndex + 1}/${totalClusters}`)
+    try {
+      const prompt = this.buildAnalysisPrompt(clusterData, clusterIndex, totalClusters)
+      const leasedKey = await this.keyManager.leaseKey()
     
     if (!leasedKey) {
       console.warn(`[Batch] No healthy keys available for cluster ${clusterIndex + 1}. Stopping analysis.`)
@@ -601,6 +678,9 @@ export class VulnerabilityAgent {
           throw new Error(`Failed to parse JSON from cluster ${clusterIndex + 1}: ${error.message}`)
         }
         throw error
+      }
+    } finally {
+      console.groupEnd()
     }
   }
 
@@ -675,38 +755,40 @@ export class VulnerabilityAgent {
     crawledData: CrawledDataSummary,
     onQuotaExhausted?: (exhausted: boolean) => void
   ): Promise<VulnerabilityReport> {
+    this.refreshKeys()
     try {
-      const clusters = this.createDataClusters(crawledData)
       const numKeys = this.clients.length
+      const clusters = this.createDataClusters(crawledData, numKeys)
       console.log(`Starting parallel analysis: ${clusters.length} clusters across ${numKeys} keys...`)
 
       // Use a worker pool pattern for parallel analysis with global key leasing
-      const workerCount = Math.min(this.keyManager.totalKeys, clusters.length)
+      // CRITICAL: Cap concurrency at 8 to prevent system/IPC overload (fixes code 58)
+      const MAX_CONCURRENCY = 8
+      const workerCount = Math.min(this.keyManager.totalKeys, clusters.length, MAX_CONCURRENCY)
       const clusterReports: VulnerabilityReport[] = []
       const queue = [...clusters]
       
-      console.log(`Launching ${workerCount} parallel workers for ${clusters.length} clusters...`)
+      console.log(`Launching ${workerCount} parallel workers for ${clusters.length} clusters (Cap: ${MAX_CONCURRENCY})...`)
 
       const workerPromises = Array.from({ length: workerCount }, async (_, workerIndex) => {
-        // Stagger startup to avoid initial burst across all keys
-        await new Promise(resolve => setTimeout(resolve, workerIndex * 1500))
+        // Reduced staggering: 200ms is enough to avoid initial collision while still being fast
+        await new Promise(resolve => setTimeout(resolve, workerIndex * 200))
         
         while (queue.length > 0) {
           const cluster = queue.shift()
           if (!cluster) break
           
           const clusterIndex = clusters.indexOf(cluster)
-          console.log(`[Worker ${workerIndex + 1}] Processing cluster ${clusterIndex + 1}/${clusters.length}...`)
           
           try {
-            const result = await this.analyzeDataCluster(cluster, clusterIndex, clusters.length, onQuotaExhausted)
+            const result = await this.analyzeDataCluster(cluster, clusterIndex, clusters.length, workerIndex + 1, onQuotaExhausted)
             clusterReports.push(result)
           } catch (err) {
             console.error(`[Worker ${workerIndex + 1}] Failed to analyze cluster ${clusterIndex + 1}:`, err)
           }
           
-          // Breathing room between clusters on the same worker
-          await new Promise(resolve => setTimeout(resolve, 1000))
+          // Minimal breathing room between clusters on the same worker
+          await new Promise(resolve => setTimeout(resolve, 500))
         }
       })
 
@@ -807,6 +889,7 @@ export class VulnerabilityAgent {
     targetUrl: string,
     onQuotaExhausted?: (exhausted: boolean) => void
   ): Promise<FullReport> {
+    this.refreshKeys()
     const enrichedVulnerabilities = selectedVulnerabilities.map(v => this.enrichVulnerability(v))
     console.log(`[Agent] Enriched ${enrichedVulnerabilities.length} vulnerabilities for report generation`)
     
@@ -859,8 +942,27 @@ export class VulnerabilityAgent {
           
           this.keyManager.releaseKey(leasedKey.index)
           
+          // CRITICAL: Merge original metadata (CWE, CVSS, Proof, References) 
+          // into the AI-generated report in case it was omitted
+          const mergedVulnerabilities = validated.vulnerabilities.map(v => {
+            const original = vulnerabilities.find(ov => ov.id === v.id || ov.title === v.title)
+            if (original) {
+              return {
+                ...v,
+                id: v.id || original.id,
+                cwe: v.cwe || original.cwe,
+                cvss: v.cvss || original.cvss,
+                proof: v.proof || original.proof,
+                references: (v.references && v.references.length > 0) ? v.references : original.references,
+                affectedAssets: (v.affectedAssets && v.affectedAssets.length > 0) ? v.affectedAssets : original.affectedAssets
+              }
+            }
+            return v
+          })
+
           return {
             ...validated,
+            vulnerabilities: mergedVulnerabilities,
             generatedAt: new Date().toISOString()
           }
         } catch (error: any) {
@@ -1032,11 +1134,19 @@ You MUST wrap your JSON response in <report> tags like this:
       "id": "vuln_001",
       "title": "Missing HttpOnly Flag on Session Cookie",
       "severity": "high",
+      "cwe": "CWE-1004",
+      "cvss": 7.5,
       "type": "Cookie Security",
       "description": "Detailed technical description with evidence and impact analysis.",
       "location": "https://example.com/path",
       "recommendation": "Specific remediation steps with code examples where applicable.",
-      "affectedAssets": ["https://example.com/asset1", "https://example.com/asset2"]
+      "affectedAssets": ["https://example.com/asset1", "https://example.com/asset2"],
+      "proof": {
+        "payload": "Set-Cookie: session=xyz; Path=/; Secure",
+        "parameter": "session",
+        "confidence": "High"
+      },
+      "references": ["https://owasp.org/www-community/HttpOnly"]
     }
   ],
   "statistics": {

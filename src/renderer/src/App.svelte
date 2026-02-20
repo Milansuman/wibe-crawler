@@ -293,16 +293,17 @@
       const response = await window.api.analyzer.generateReport({
         vulnerabilities: vulnerabilities.map((v) => ({
           id: v.id,
-          title: v.name, // Map back to title for backend
+          title: v.name,
           severity: v.severity,
-          cwe: v.cwe, // Pass metadata if present
+          cwe: v.cwe,
           cvss: v.cvss,
+          proof: v.proof,
           references: v.references,
           description: v.description,
           recommendation: v.recommendation,
           affectedAssets: v.affectedAssets,
-          type: 'Security Vulnerability', // Default type
-          location: v.affectedAssets[0] || scannedBaseUrl
+          type: 'Security Vulnerability',
+          location: v.location || v.affectedAssets[0] || scannedBaseUrl
         })),
         data: {
           crawlResults: fullCrawlResults,
@@ -456,9 +457,15 @@
           id: v.id || Math.random().toString(36).substr(2, 9),
           name: v.title,
           severity: v.severity,
+          cwe: v.cwe,
+          cvss: v.cvss,
           description: v.description,
           recommendation: v.recommendation,
           affectedAssets: v.affectedAssets || [],
+          proof: v.proof,
+          references: v.references || [],
+          location:
+            v.affectedAssets && v.affectedAssets[0] ? v.affectedAssets[0] : scannedBaseUrl || '',
           // Add size for grid view visualization
           size: v.severity === 'critical' ? 3 : v.severity === 'high' ? 2 : 1
         }))
