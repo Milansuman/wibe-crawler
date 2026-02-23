@@ -321,8 +321,7 @@ export function generateVulnerabilityPDF(
         doc.setFontSize(9)
         const parts = []
         if (vuln.cwe) parts.push(`Classification: ${vuln.cwe}`)
-        if (vuln.cvss) parts.push(`Severity Score: ${vuln.cvss} (CVSS 3.1)`)
-        
+        if (vuln.cvss) parts.push(`Severity Score: ${vuln.cvss} (CVSS 3.1)`)        
         doc.text(parts.join('  |  '), margin, yPos)
         yPos += 6
         doc.setTextColor(0) // Reset
