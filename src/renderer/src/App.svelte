@@ -65,6 +65,23 @@
   let backendScanTargets: string[] = []
   let backendScansCompleted = 0
   let backendScansFailed = 0
+  let backendBatchSize = 5
+  let backendProcessedCount = 0
+  let backendTotalBatches = 0
+  let currentBatchIndex = 0
+  let currentBatchTargets: string[] = []
+
+  $: backendProcessedCount = backendScansCompleted + backendScansFailed
+  $: backendTotalBatches =
+    backendScanTargets.length > 0 ? Math.ceil(backendScanTargets.length / backendBatchSize) : 0
+  $: currentBatchIndex =
+    backendTotalBatches > 0
+      ? Math.min(Math.floor(backendProcessedCount / backendBatchSize), backendTotalBatches - 1)
+      : 0
+  $: currentBatchTargets = backendScanTargets.slice(
+    currentBatchIndex * backendBatchSize,
+    (currentBatchIndex + 1) * backendBatchSize
+  )
 
   let vulnerabilities = []
 
@@ -756,12 +773,19 @@
       crawlStatus = `Starting backend scan on ${backendScanTargets.length} targets in batches...`
 
       // Use backend agent instead of local analyzer
-      console.log('[UI] Starting backend agent scan for targets:', backendScanTargets.length, 'Type:', selectedScanType)
+      console.log(
+        '[UI] Starting backend agent scan for targets:',
+        backendScanTargets.length,
+        'Type:',
+        selectedScanType,
+        'Batch size:',
+        backendBatchSize
+      )
       const response = await window.api.backendAgent.startScan(
         backendScanTargets,
         selectedScanType, // Use user-selected scan type
         `scan-${Date.now()}`,
-        5
+        backendBatchSize
       )
 
       if (!response.success) {
@@ -913,7 +937,29 @@
             {:else if activeTargetTab === 'domains'}
               <DomainsTab {discoveredDomains} />
             {:else if activeTargetTab === 'vulnerabilities'}
-              <VulnerabilitiesTab {vulnerabilities} onAddToReport={addToReport} />
+              <div class="flex flex-col gap-3">
+                {#if isAnalyzing && currentBatchTargets.length > 0}
+                  <div class="border border-purple-900/50 bg-purple-950/20 p-3">
+                    <div class="flex items-center justify-between mb-2">
+                      <h3 class="text-xs font-semibold text-purple-300 uppercase tracking-wider">
+                        Current Batch
+                      </h3>
+                      <span class="text-[11px] text-purple-300/80 font-mono">
+                        {currentBatchIndex + 1}/{backendTotalBatches}
+                      </span>
+                    </div>
+                    <div class="text-[11px] text-purple-200/80 mb-2">
+                      Attacking {currentBatchTargets.length} URL{currentBatchTargets.length === 1 ? '' : 's'}
+                    </div>
+                    <ul class="max-h-28 overflow-y-auto text-[11px] text-purple-100/90 space-y-1 font-mono">
+                      {#each currentBatchTargets as target}
+                        <li class="truncate" title={target}>{target}</li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+                <VulnerabilitiesTab {vulnerabilities} onAddToReport={addToReport} />
+              </div>
             {:else if activeTargetTab === 'forms'}
               <FormsTab {allForms} onSelectForm={selectForm} />
             {:else if activeTargetTab === 'assets'}
