@@ -59,7 +59,7 @@
   let analysisTimer = null
   let toolCallsCompleted = 0
   let currentToolName = ''
-  let selectedScanType: 'quick' | 'full' | 'targeted' = 'full'
+  let selectedScanType: 'quick' | 'full' | 'targeted' = 'quick'
   let todos: Array<{content: string, status: 'completed' | 'pending' | 'in-progress'}> = []
   let showTodos = false
 

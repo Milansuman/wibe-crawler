@@ -37,6 +37,8 @@ Key principles:
 - DO NOT wait for tool calls to finish before moving to the next step. Only wait for the tool output when you're generating the final report, or when you need specific information from the tool output to test something else.
 
 When testing, focus on: SQL injection, XSS, authentication bypasses, CSRF, insecure configurations, sensitive data exposure, and access control issues.
+- CRITICAL: If a tool fails, times out, or returns an error, DO NOT retry it. Move on to the next step immediately. DO NOT get stuck in an execution loop.
+- CRITICAL: DO NOT manually crawl the website by calling send_http_request on every link you find. Rely on automated tools like gobuster or nikto for discovery. Use send_http_request ONLY for verifying specific vulnerabilities.
 
 IMPORTANT - Task Planning:
 You have access to a 'write_todos' tool. For complex multi-step scans:
@@ -90,6 +92,7 @@ def get_scan_instruction(target: str, scan_type: str) -> str:
         "quick": f"""Perform a QUICK security scan on: {target}
 
 This is a time-efficient scan focusing on high-impact vulnerabilities. Follow these steps:
+VERY CRITICAL: DO NOT MAKE MORE THAN 5 TOOL CALLS TOTAL. Once you have made 5 tool calls, you MUST stop testing and IMMEDIATELY output your final JSON report.
 
 1. **Reconnaissance** (2-3 minutes):
    - Use send_http_request to check if the target is accessible

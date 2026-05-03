@@ -15,7 +15,7 @@ import { EventEmitter } from 'events'
  */
 
 // Global API endpoint configuration
-export let BACKEND_API_ENDPOINT = process.env.BACKEND_API_ENDPOINT || 'http://localhost:8000'
+export let BACKEND_API_ENDPOINT = process.env.BACKEND_API_ENDPOINT || 'http://127.0.0.1:8000'
 
 /**
  * Set the backend API endpoint

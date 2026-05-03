@@ -36,14 +36,14 @@ async def run_nmap(target: str, options: str = "-sV") -> str:
     """
     try:
         cmd = ["nmap", *shlex.split(options), target]
-        returncode, stdout, stderr = await _run_command(cmd, timeout=300)
+        returncode, stdout, stderr = await _run_command(cmd, timeout=30)
 
         if returncode != 0:
             return f"Error running nmap: {stderr}"
 
         return stdout
     except asyncio.TimeoutError:
-        return "Nmap scan timed out (5 minute limit)"
+        return "Nmap scan timed out (30 second limit)"
     except FileNotFoundError:
         return "Error executing nmap: nmap command not found"
     except Exception as e:
@@ -64,15 +64,16 @@ async def run_nikto(target: str, options: str = "") -> str:
     try:
         # -ask no: Don't ask for confirmations
         # -nointeractive: Run without user interaction
-        cmd = ["nikto", "-h", target, "-ask", "no", "-nointeractive"]
+        # -maxtime 30s: Limit execution time
+        cmd = ["nikto", "-h", target, "-ask", "no", "-nointeractive", "-maxtime", "30s"]
         if options:
             cmd.extend(shlex.split(options))
 
-        _, stdout, stderr = await _run_command(cmd, timeout=600)
+        _, stdout, stderr = await _run_command(cmd, timeout=30)
 
         return stdout if stdout else stderr
     except asyncio.TimeoutError:
-        return "Nikto scan timed out (10 minute limit)"
+        return "Nikto scan timed out (30 second limit)"
     except FileNotFoundError:
         return "Error executing nikto: nikto command not found"
     except Exception as e:
@@ -93,14 +94,15 @@ async def run_sqlmap(target: str, options: str = "--batch --risk=1 --level=1") -
     try:
         # --batch: Never ask for user input, use default behavior
         # --answers: Provide answers to questions (skip prompts)
+        # --timeout 30: limit wait time
         base_options = "--batch --answers=quit=N,follow=N,continue=Y"
         combined_options = f"{base_options} {options}"
         cmd = ["sqlmap", "-u", target, *shlex.split(combined_options)]
-        _, stdout, stderr = await _run_command(cmd, timeout=600)
+        _, stdout, stderr = await _run_command(cmd, timeout=30)
 
         return stdout if stdout else stderr
     except asyncio.TimeoutError:
-        return "SQLMap scan timed out (10 minute limit)"
+        return "SQLMap scan timed out (30 second limit)"
     except FileNotFoundError:
         return "Error executing sqlmap: sqlmap command not found"
     except Exception as e:
@@ -120,15 +122,15 @@ async def run_xssstrike(target: str, options: str = "") -> str:
     """
     try:
         # --skip: Skip confirmation prompts where possible
-        cmd = ["xssstrike", "-u", target, "--skip"]
+        cmd = ["xssstrike", "-u", target, "--skip", "--timeout", "30"]
         if options:
             cmd.extend(shlex.split(options))
 
-        _, stdout, stderr = await _run_command(cmd, timeout=300)
+        _, stdout, stderr = await _run_command(cmd, timeout=30)
 
         return stdout if stdout else stderr
     except asyncio.TimeoutError:
-        return "XSStrike scan timed out (5 minute limit)"
+        return "XSStrike scan timed out (30 second limit)"
     except FileNotFoundError:
         return "Error executing xssstrike: xssstrike command not found"
     except Exception as e:
@@ -237,11 +239,11 @@ async def run_gobuster(target: str, wordlist: str = "common", options: str = "")
         if options:
             cmd.extend(shlex.split(options))
 
-        _, stdout, stderr = await _run_command(cmd, timeout=600)
+        _, stdout, stderr = await _run_command(cmd, timeout=30)
 
         return stdout if stdout else stderr
     except asyncio.TimeoutError:
-        return "Gobuster scan timed out (10 minute limit)"
+        return "Gobuster scan timed out (30 second limit)"
     except FileNotFoundError:
         return "Error executing gobuster: gobuster command not found"
     except Exception as e:
@@ -265,11 +267,11 @@ async def run_wpscan(target: str, options: str = "--enumerate vp,vt") -> str:
         # --random-user-agent: Use random user agent (good practice)
         base_cmd = ["wpscan", "--url", target, "--no-update", "--batch", "--random-user-agent"]
         cmd = base_cmd + shlex.split(options)
-        _, stdout, stderr = await _run_command(cmd, timeout=600)
+        _, stdout, stderr = await _run_command(cmd, timeout=30)
 
         return stdout if stdout else stderr
     except asyncio.TimeoutError:
-        return "WPScan timed out (10 minute limit)"
+        return "WPScan timed out (30 second limit)"
     except FileNotFoundError:
         return "Error executing wpscan: wpscan command not found"
     except Exception as e:
