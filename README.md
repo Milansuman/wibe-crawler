@@ -1,4 +1,4 @@
-# Wibe Crawler & MR-Robot
+# Wibe Crawler
 
 An AI-powered web security assessment suite that combines a high-performance Electron-based crawler with an intelligent backend penetration testing agent (`mr-robot`).
 
