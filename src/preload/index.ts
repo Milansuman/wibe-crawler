@@ -74,8 +74,8 @@ const api = {
     testConnection: () => ipcRenderer.invoke('backend-test-connection'),
     
     // Scan operations
-    startScan: (target: string, scanType: 'quick' | 'full' | 'targeted', threadId?: string) => 
-      ipcRenderer.invoke('backend-start-scan', { target, scanType, threadId }),
+    startScan: (target: string | string[], scanType: 'quick' | 'full' | 'targeted', threadId?: string, batchSize?: number) => 
+      ipcRenderer.invoke('backend-start-scan', { target, scanType, threadId, batchSize }),
     stopScan: () => ipcRenderer.invoke('backend-stop-scan'),
     isActive: () => ipcRenderer.invoke('backend-is-active'),
     

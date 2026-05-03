@@ -380,10 +380,11 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('backend-start-scan', async (event, { target, scanType, threadId }: {
-    target: string
+  ipcMain.handle('backend-start-scan', async (event, { target, scanType, threadId, batchSize }: {
+    target: string | string[]
     scanType: ScanType
     threadId?: string
+    batchSize?: number
   }) => {
     const sender = event.sender
 
@@ -432,7 +433,7 @@ app.whenReady().then(() => {
       })
 
       // Start the scan (non-blocking)
-      backendAgent.startScan(target, scanType, threadId).catch((error) => {
+      backendAgent.startScan(target, scanType, threadId, { batchSize }).catch((error) => {
         console.error('Backend scan error:', error)
         sender.send('backend-scan-error', {
           error: error instanceof Error ? error.message : 'Unknown error'

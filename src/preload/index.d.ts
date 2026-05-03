@@ -44,7 +44,7 @@ interface BackendAgentAPI {
   testConnection: () => Promise<any>
   
   // Scan operations
-  startScan: (target: string, scanType: 'quick' | 'full' | 'targeted', threadId?: string) => Promise<any>
+  startScan: (target: string | string[], scanType: 'quick' | 'full' | 'targeted', threadId?: string, batchSize?: number) => Promise<any>
   stopScan: () => Promise<any>
   isActive: () => Promise<any>
   

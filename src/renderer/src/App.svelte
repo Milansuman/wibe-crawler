@@ -62,6 +62,9 @@
   let selectedScanType: 'quick' | 'full' | 'targeted' = 'quick'
   let todos: Array<{content: string, status: 'completed' | 'pending' | 'in-progress'}> = []
   let showTodos = false
+  let backendScanTargets: string[] = []
+  let backendScansCompleted = 0
+  let backendScansFailed = 0
 
   let vulnerabilities = []
 
@@ -311,7 +314,13 @@
               const vulnerabilityData = parseVulnerabilitiesFromResponse(content)
               if (vulnerabilityData && vulnerabilityData.length > 0) {
                 const prevCount = vulnerabilities.length
-                vulnerabilities = vulnerabilityData
+                const merged = [...vulnerabilities]
+                for (const vuln of vulnerabilityData) {
+                  if (!merged.find((v) => v.id === vuln.id && v.name === vuln.name && v.location === vuln.location)) {
+                    merged.push(vuln)
+                  }
+                }
+                vulnerabilities = merged
                 crawlStatus = `Found ${vulnerabilities.length} vulnerabilities`
                 console.log('[Backend] Parsed', vulnerabilities.length, 'vulnerabilities successfully')
                 
@@ -330,6 +339,32 @@
 
         window.api.backendAgent.onComplete((data) => {
           console.log('[Backend] Scan complete:', data)
+
+          // Merge report vulnerabilities as batches complete
+          if (data.report && Array.isArray(data.report.vulnerabilities) && data.report.vulnerabilities.length > 0) {
+            console.log('[Backend] Got report from complete event:', data.report.vulnerabilities.length, 'vulns')
+            const incoming = mapVulns(data.report.vulnerabilities)
+            if (incoming.length > 0) {
+              const merged = [...vulnerabilities]
+              for (const vuln of incoming) {
+                if (!merged.find((v) => v.id === vuln.id && v.name === vuln.name && v.location === vuln.location)) {
+                  merged.push(vuln)
+                }
+              }
+              vulnerabilities = merged
+            }
+          }
+
+          backendScansCompleted++
+          const totalTargets = backendScanTargets.length || 1
+          const finishedCount = backendScansCompleted + backendScansFailed
+          analysisProgress = Math.min(100, Math.round((finishedCount / totalTargets) * 100))
+          crawlStatus = `Backend scan progress: ${finishedCount}/${totalTargets} targets`
+
+          if (finishedCount < totalTargets) {
+            return
+          }
+
           isAnalyzing = false
           analysisProgress = 100
           if (analysisTimer) {
@@ -338,13 +373,7 @@
           }
 
           // Primary source: report embedded in the complete event by the backend
-          if (data.report && Array.isArray(data.report.vulnerabilities) && data.report.vulnerabilities.length > 0) {
-            console.log('[Backend] Got report from complete event:', data.report.vulnerabilities.length, 'vulns')
-            vulnerabilities = mapVulns(data.report.vulnerabilities)
-            crawlStatus = `Analysis complete: Found ${vulnerabilities.length} vulnerabilities`
-            activeTargetTab = 'vulnerabilities'
-          } else if (vulnerabilities.length > 0) {
-            // Fallback: vulnerabilities were already parsed from a response event
+          if (vulnerabilities.length > 0) {
             crawlStatus = `Analysis complete: Found ${vulnerabilities.length} vulnerabilities`
             activeTargetTab = 'vulnerabilities'
           } else {
@@ -355,6 +384,17 @@
 
         window.api.backendAgent.onError((data) => {
           console.error('[Backend] Error:', data.error)
+
+          backendScansFailed++
+          const totalTargets = backendScanTargets.length || 1
+          const finishedCount = backendScansCompleted + backendScansFailed
+          analysisProgress = Math.min(100, Math.round((finishedCount / totalTargets) * 100))
+
+          if (finishedCount < totalTargets) {
+            crawlStatus = `Backend scan error on batch target (${finishedCount}/${totalTargets})`
+            return
+          }
+
           isAnalyzing = false
           if (analysisTimer) {
             clearInterval(analysisTimer)
@@ -684,12 +724,44 @@
         analysisDuration = Date.now() - startTime
       }, 100)
 
+      const rawTargets = [
+        ...fullCrawlResults.map((r: any) => r.url),
+        ...discoveredUrls,
+        scannedBaseUrl
+      ]
+
+      const normalizedTargets = rawTargets
+        .map((value) => (value ?? '').toString().trim())
+        .filter((value) => value.length > 0)
+        .map((value) => {
+          try {
+            const url = new URL(value)
+            url.hash = ''
+            return url.toString()
+          } catch {
+            return value
+          }
+        })
+
+      const targetUrls = Array.from(new Set(normalizedTargets))
+
+      if (targetUrls.length === 0 && scannedBaseUrl) {
+        targetUrls.push(scannedBaseUrl)
+      }
+
+      backendScanTargets = targetUrls
+      backendScansCompleted = 0
+      backendScansFailed = 0
+
+      crawlStatus = `Starting backend scan on ${backendScanTargets.length} targets in batches...`
+
       // Use backend agent instead of local analyzer
-      console.log('[UI] Starting backend agent scan for:', scannedBaseUrl, 'Type:', selectedScanType)
+      console.log('[UI] Starting backend agent scan for targets:', backendScanTargets.length, 'Type:', selectedScanType)
       const response = await window.api.backendAgent.startScan(
-        scannedBaseUrl,
+        backendScanTargets,
         selectedScanType, // Use user-selected scan type
-        `scan-${Date.now()}`
+        `scan-${Date.now()}`,
+        5
       )
 
       if (!response.success) {
