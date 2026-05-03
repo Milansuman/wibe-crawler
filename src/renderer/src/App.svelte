@@ -301,10 +301,11 @@
         })
 
         window.api.backendAgent.onResponse((data) => {
-          console.log('[Backend] Response received')
+          const content = data.content
+          console.log('[Backend] Response received, content length:', content?.length)
+          console.log('[Backend] Response content (first 2000 chars):', content?.substring(0, 2000))
           // Try to parse vulnerabilities from response
           try {
-            const content = data.content
             if (content) {
               // Look for JSON vulnerability data in the response
               const vulnerabilityData = parseVulnerabilitiesFromResponse(content)
@@ -312,11 +313,14 @@
                 const prevCount = vulnerabilities.length
                 vulnerabilities = vulnerabilityData
                 crawlStatus = `Found ${vulnerabilities.length} vulnerabilities`
+                console.log('[Backend] Parsed', vulnerabilities.length, 'vulnerabilities successfully')
                 
                 // Auto-switch to vulnerabilities tab when FIRST batch of vulnerabilities is found
                 if (prevCount === 0 && vulnerabilities.length > 0) {
                   activeTargetTab = 'vulnerabilities'
                 }
+              } else {
+                console.log('[Backend] Response had no parseable vulnerability data')
               }
             }
           } catch (err) {
@@ -332,13 +336,22 @@
             clearInterval(analysisTimer)
             analysisTimer = null
           }
-          if (vulnerabilities.length > 0) {
+
+          // Primary source: report embedded in the complete event by the backend
+          if (data.report && Array.isArray(data.report.vulnerabilities) && data.report.vulnerabilities.length > 0) {
+            console.log('[Backend] Got report from complete event:', data.report.vulnerabilities.length, 'vulns')
+            vulnerabilities = mapVulns(data.report.vulnerabilities)
+            crawlStatus = `Analysis complete: Found ${vulnerabilities.length} vulnerabilities`
+            activeTargetTab = 'vulnerabilities'
+          } else if (vulnerabilities.length > 0) {
+            // Fallback: vulnerabilities were already parsed from a response event
             crawlStatus = `Analysis complete: Found ${vulnerabilities.length} vulnerabilities`
             activeTargetTab = 'vulnerabilities'
           } else {
             crawlStatus = 'Backend analysis complete - no vulnerabilities found'
           }
         })
+
 
         window.api.backendAgent.onError((data) => {
           console.error('[Backend] Error:', data.error)
@@ -566,49 +579,82 @@
 
   // Helper function to parse vulnerabilities from backend response
   function parseVulnerabilitiesFromResponse(content: string) {
-    try {
-      // Try to extract JSON from various formats
-      let jsonData = null
-      
-      // Look for JSON block in markdown code fence
-      const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
-      if (codeBlockMatch) {
-        jsonData = JSON.parse(codeBlockMatch[1])
+    const tryParse = (str: string): any => {
+      try { return JSON.parse(str.trim()) } catch { return null }
+    }
+
+    const extractVulns = (jsonData: any): any[] | null => {
+      if (!jsonData) return null
+      // Must have a vulnerabilities array to be a valid report
+      if (Array.isArray(jsonData.vulnerabilities) && jsonData.vulnerabilities.length > 0) {
+        return jsonData.vulnerabilities
       }
-      
-      // Look for plain JSON object/array
-      if (!jsonData) {
-        const jsonMatch = content.match(/\{[\s\S]*\}|\[[\s\S]*\]/)
-        if (jsonMatch) {
-          jsonData = JSON.parse(jsonMatch[0])
+      // If it's already an array of vuln-like objects
+      if (Array.isArray(jsonData) && jsonData.length > 0 && (jsonData[0].title || jsonData[0].name) && jsonData[0].severity) {
+        return jsonData
+      }
+      return null
+    }
+
+    try {
+      // Strategy 1: ```json ... ``` code fence (most reliable)
+      const jsonFenceMatches = [...content.matchAll(/```json\s*([\s\S]*?)\s*```/g)]
+      for (const m of jsonFenceMatches) {
+        const parsed = tryParse(m[1])
+        const vulns = extractVulns(parsed)
+        if (vulns) {
+          console.log('[Parser] Strategy 1 (json fence) succeeded, found', vulns.length, 'vulns')
+          return mapVulns(vulns)
         }
       }
 
-      if (!jsonData) return null
+      // Strategy 2: ``` ... ``` generic code fence
+      const genericFenceMatches = [...content.matchAll(/```\s*([\s\S]*?)\s*```/g)]
+      for (const m of genericFenceMatches) {
+        const parsed = tryParse(m[1])
+        const vulns = extractVulns(parsed)
+        if (vulns) {
+          console.log('[Parser] Strategy 2 (generic fence) succeeded, found', vulns.length, 'vulns')
+          return mapVulns(vulns)
+        }
+      }
 
-      // Extract vulnerabilities array
-      let vulnArray = jsonData.vulnerabilities || jsonData
-      if (!Array.isArray(vulnArray)) return null
+      // Strategy 3: Find all top-level JSON objects and pick the one with "vulnerabilities"
+      const objectMatches = [...content.matchAll(/\{[\s\S]+?\}/g)]
+      // Try longest matches first (sort by length desc)
+      objectMatches.sort((a, b) => b[0].length - a[0].length)
+      for (const m of objectMatches) {
+        const parsed = tryParse(m[0])
+        const vulns = extractVulns(parsed)
+        if (vulns) {
+          console.log('[Parser] Strategy 3 (object scan) succeeded, found', vulns.length, 'vulns')
+          return mapVulns(vulns)
+        }
+      }
 
-      // Map to our vulnerability format
-      return vulnArray.map((v) => ({
-        id: v.id || Math.random().toString(36).substr(2, 9),
-        name: v.title || v.name,
-        severity: v.severity,
-        cwe: v.cwe,
-        cvss: v.cvss,
-        description: v.description,
-        recommendation: v.recommendation,
-        affectedAssets: v.affectedAssets || v.affected_assets || [],
-        proof: v.proof,
-        references: v.references || [],
-        location: (v.affectedAssets || v.affected_assets || [])[0] || scannedBaseUrl || '',
-        size: v.severity === 'critical' ? 3 : v.severity === 'high' ? 2 : 1
-      }))
+      console.log('[Parser] All strategies failed — no vulnerability JSON found in response')
+      return null
     } catch (err) {
-      console.error('Failed to parse vulnerabilities:', err)
+      console.error('[Parser] Unexpected error:', err)
       return null
     }
+  }
+
+  function mapVulns(vulnArray: any[]) {
+    return vulnArray.map((v) => ({
+      id: v.id || Math.random().toString(36).substr(2, 9),
+      name: v.title || v.name || 'Unknown Vulnerability',
+      severity: v.severity || 'info',
+      cwe: v.cwe,
+      cvss: v.cvss,
+      description: v.description || '',
+      recommendation: v.recommendation || '',
+      affectedAssets: v.affectedAssets || v.affected_assets || [],
+      proof: v.proof,
+      references: v.references || [],
+      location: (v.affectedAssets || v.affected_assets || [])[0] || scannedBaseUrl || '',
+      size: v.severity === 'critical' ? 3 : v.severity === 'high' ? 2 : 1
+    }))
   }
 
   async function analyzeVulnerabilities() {
