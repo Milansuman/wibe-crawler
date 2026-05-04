@@ -1,11 +1,52 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
+import fs from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { WebCrawler, CrawlResult } from './crawler_native'
 import { DirectoryFuzzer, type FuzzResult, getAvailableWordlists } from './fuzzer'
 import { VulnerabilityAgent, CrawledDataSummary } from './agent'
 import { BackendAgent, setBackendApiEndpoint, getBackendApiEndpoint, type ScanType } from './backend_agent'
+
+const getCacheDir = () => join(process.cwd(), '.cache')
+
+const getCacheKeyFromWebsite = (website: string) => {
+  const trimmed = website.trim()
+  try {
+    const url = new URL(trimmed)
+    const host = url.hostname.toLowerCase()
+    const port = url.port ? `_${url.port}` : ''
+    return `${url.protocol.replace(':', '')}_${host}${port}`
+  } catch {
+    return trimmed.toLowerCase().replace(/[^a-z0-9.-]+/gi, '_')
+  }
+}
+
+const getWebsiteCachePath = (website: string) => {
+  const safeName = getCacheKeyFromWebsite(website)
+  return join(getCacheDir(), `${safeName}.json`)
+}
+
+const writeWebsiteCache = async (website: string, report: unknown) => {
+  const cacheDir = getCacheDir()
+  await fs.mkdir(cacheDir, { recursive: true })
+  const filePath = getWebsiteCachePath(website)
+  await fs.writeFile(filePath, JSON.stringify(report, null, 2), 'utf-8')
+  return filePath
+}
+
+const readWebsiteCache = async (website: string) => {
+  try {
+    const filePath = getWebsiteCachePath(website)
+    const raw = await fs.readFile(filePath, 'utf-8')
+    return JSON.parse(raw)
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return null
+    }
+    throw error
+  }
+}
 
 // ... existing code ...
 
@@ -470,6 +511,34 @@ app.whenReady().then(() => {
     return {
       success: true,
       active: backendAgent ? backendAgent.isActive() : false
+    }
+  })
+
+  ipcMain.handle('cache-save-vulnerability-report', async (_, { website, report }: { website: string; report: any }) => {
+    if (!website) {
+      return { success: false, error: 'Website is required' }
+    }
+
+    try {
+      const filePath = await writeWebsiteCache(website, report ?? {})
+      return { success: true, path: filePath }
+    } catch (error) {
+      console.error('Failed to write cache file:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+
+  ipcMain.handle('cache-read-vulnerability-report', async (_, { website }: { website: string }) => {
+    if (!website) {
+      return { success: false, error: 'Website is required' }
+    }
+
+    try {
+      const report = await readWebsiteCache(website)
+      return { success: true, report }
+    } catch (error) {
+      console.error('Failed to read cache file:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
 

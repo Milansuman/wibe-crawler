@@ -60,6 +60,11 @@ interface BackendAgentAPI {
   removeAllListeners: () => void
 }
 
+interface CacheAPI {
+  saveVulnerabilityReport: (website: string, report: any) => Promise<any>
+  readVulnerabilityReport: (website: string) => Promise<any>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -69,6 +74,7 @@ declare global {
       fuzzer: FuzzerAPI
       analyzer: AnalyzerAPI
       backendAgent: BackendAgentAPI
+      cache: CacheAPI
     }
   }
 }

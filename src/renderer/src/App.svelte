@@ -51,6 +51,7 @@
   let scannedBaseUrl = ''
   let isQuotaExhausted = false
   let isLandingPageError = false
+  let lastCacheFingerprint = ''
 
   // Timing state
   let crawlDuration = 0
@@ -345,6 +346,10 @@
                 if (prevCount === 0 && vulnerabilities.length > 0) {
                   activeTargetTab = 'vulnerabilities'
                 }
+
+                if (vulnerabilities.length > 0) {
+                  void saveVulnerabilityCache(scannedBaseUrl, vulnerabilities)
+                }
               } else {
                 console.log('[Backend] Response had no parseable vulnerability data')
               }
@@ -369,6 +374,9 @@
                 }
               }
               vulnerabilities = merged
+            }
+            if (vulnerabilities.length > 0) {
+              void saveVulnerabilityCache(scannedBaseUrl, vulnerabilities)
             }
           }
 
@@ -460,9 +468,11 @@
       allAssets = {} // Reset on start
       vulnerabilities = []
       reportItems = []
+      lastCacheFingerprint = ''
       crawlStatus = 'Starting scan...'
       scannedBaseUrl = url
       crawlDuration = 0
+      void loadVulnerabilityCache(url)
 
       const startTime = Date.now()
       crawlTimer = setInterval(() => {
@@ -632,6 +642,59 @@
 
   function handleTabChange(tab) {
     activeTargetTab = tab
+  }
+
+  async function saveVulnerabilityCache(website: string, items: any[]) {
+    if (!website || !window.api?.cache) return
+
+    const fingerprint = JSON.stringify({
+      website: website.trim(),
+      count: items.length,
+      keys: items
+        .map((v) => v.id || v.name || v.location || '')
+        .filter(Boolean)
+        .sort()
+    })
+
+    if (fingerprint === lastCacheFingerprint) {
+      return
+    }
+
+    lastCacheFingerprint = fingerprint
+
+    try {
+      const report = {
+        website,
+        vulnerabilities: items,
+        statistics: {
+          total: items.length,
+          critical: items.filter((v) => v.severity === 'critical').length,
+          high: items.filter((v) => v.severity === 'high').length,
+          medium: items.filter((v) => v.severity === 'medium').length,
+          low: items.filter((v) => v.severity === 'low').length,
+          info: items.filter((v) => v.severity === 'info').length
+        },
+        savedAt: new Date().toISOString()
+      }
+      await window.api.cache.saveVulnerabilityReport(website, report)
+    } catch (error) {
+      console.error('[UI] Failed to save vulnerability cache:', error)
+    }
+  }
+
+  async function loadVulnerabilityCache(website: string) {
+    if (!website || !window.api?.cache) return
+
+    try {
+      const response = await window.api.cache.readVulnerabilityReport(website)
+      const cached = response?.report
+      if (cached && Array.isArray(cached.vulnerabilities) && cached.vulnerabilities.length > 0) {
+        vulnerabilities = cached.vulnerabilities
+        activeTargetTab = 'vulnerabilities'
+      }
+    } catch (error) {
+      console.error('[UI] Failed to read vulnerability cache:', error)
+    }
   }
 
   // Helper function to parse vulnerabilities from backend response

@@ -114,6 +114,12 @@ const api = {
       ipcRenderer.removeAllListeners('backend-scan-complete')
       ipcRenderer.removeAllListeners('backend-scan-error')
     }
+  },
+  cache: {
+    saveVulnerabilityReport: (website: string, report: any) =>
+      ipcRenderer.invoke('cache-save-vulnerability-report', { website, report }),
+    readVulnerabilityReport: (website: string) =>
+      ipcRenderer.invoke('cache-read-vulnerability-report', { website })
   }
 }
 
