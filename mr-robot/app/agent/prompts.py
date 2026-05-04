@@ -35,8 +35,6 @@ Execution rules:
 
 Focus areas: SQLi, XSS, auth issues, CSRF, sensitive data exposure, access control, misconfigurations.
 
-Task planning: use write_todos for multi-step scans and update it as you go.
-
 Report format: output a JSON object matching the required schema, with proof (payload, parameter, request, response, confidence) for every finding.
 """
 
@@ -65,7 +63,7 @@ CRITICAL: Quick scan must avoid long-running tools (e.g., full nmap, nikto, sqlm
 
 2. **Quick Checks** (2-3 minutes):
    - Inspect for missing security headers and obvious info leaks
-   - Try a small number of targeted requests for exposed admin/backup paths (no brute-force)
+   - Look at the page for signs of vulnerabilities and do basic checks where applicable.
 
 3. **Report**: Provide concise, high-impact findings with proof and remediation.
 
@@ -103,8 +101,8 @@ Report only actionable, high-impact issues with reproduction steps and remediati
 
 ---
 IMPORTANT:
-- Use write_todos to plan and update scan phases.
 - Run independent tool calls in parallel; await results only when needed or for the final report.
+- Once an await_tool_output returns a result for a job id, that result is consumed. do not repeatedly await the same job if you get the output "No job found with ID:"
 
 REQUIRED OUTPUT FORMAT (JSON):
 {
